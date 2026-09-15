@@ -1,0 +1,55 @@
+version: 2
+
+project_name: tolkiengateway-reader
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: tgw
+    main: ./cmd/tgw
+    binary: tgw
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - darwin_amd64
+      - darwin_arm64
+      - windows_amd64
+      - windows_arm64
+
+archives:
+  - id: default
+    ids:
+      - tgw
+    name_template: "tgw_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: tamnd
+    name: tolkiengateway-reader

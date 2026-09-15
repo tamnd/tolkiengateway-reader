@@ -1,0 +1,4 @@
+/dist/
+/site/
+*.out
+.DS_Store
