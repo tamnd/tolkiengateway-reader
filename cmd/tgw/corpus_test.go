@@ -132,6 +132,18 @@ func TestRenderArticleCarriesCategoriesAndInfobox(t *testing.T) {
 	}
 }
 
+func TestRenderArticleCarriesNamedInfobox(t *testing.T) {
+	text := renderArticle(rawPage{Title: "Album", PageID: 3, Revision: 4, Wikitext: "{{album\n| title = Record\n| artist = Someone\n}}\nText."})
+	for _, want := range []string{`infobox:`, `artist: "Someone"`, `title: "Record"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("named infobox missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{album") {
+		t.Fatalf("named infobox leaked into body:\n%s", text)
+	}
+}
+
 /*
 func TestTranslateQueuesAndWritesVietnameseArticle(t *testing.T) {
 	translated := "---\ntitle: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n\n## Cuộc đời\n\nBilbo là một Hobbit.\n"
