@@ -25,6 +25,8 @@ func main() {
 		err = runAudit(os.Args[2:])
 	case "acquire":
 		err = runAcquire(os.Args[2:])
+	case "extract":
+		err = runExtract(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -37,5 +39,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tgw <version|acquire|publish|audit> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: tgw <version|acquire|extract|publish|audit> [flags]")
 }
