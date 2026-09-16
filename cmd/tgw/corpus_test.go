@@ -144,6 +144,23 @@ func TestRenderArticleCarriesNamedInfobox(t *testing.T) {
 	}
 }
 
+func TestRenderArticleCarriesRedirectMetadata(t *testing.T) {
+	text := renderArticle(rawPage{Title: "Bilbo", PageID: 2, Revision: 3, Wikitext: "#REDIRECT [[Bilbo Baggins]]"})
+	for _, want := range []string{`redirect: true`, `redirect_target: "Bilbo Baggins"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("redirect metadata missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestWikitextToMarkdownConvertsMainTemplate(t *testing.T) {
+	got := wikitextToMarkdown("{{Main|Hobbits}}")
+	want := "See also: [Hobbits](/wiki/Hobbits).\n"
+	if got != want {
+		t.Fatalf("unexpected main template conversion: %q", got)
+	}
+}
+
 /*
 func TestTranslateQueuesAndWritesVietnameseArticle(t *testing.T) {
 	translated := "---\ntitle: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n\n## Cuộc đời\n\nBilbo là một Hobbit.\n"
