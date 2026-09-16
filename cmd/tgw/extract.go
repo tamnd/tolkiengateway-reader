@@ -14,9 +14,13 @@ import (
 )
 
 var (
-	sectionRE = regexp.MustCompile(`^(={2,6})\s*(.*?)\s*$`)
-	refRE     = regexp.MustCompile(`(?is)<ref(?:\s[^>]*)?>(.*?)</ref\s*>|<ref\s*/>`)
-	commentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
+	sectionRE  = regexp.MustCompile(`^(={2,6})\s*(.*?)\s*$`)
+	refRE      = regexp.MustCompile(`(?is)<ref(?:\s[^>]*)?>(.*?)</ref\s*>|<ref\s*/>`)
+	commentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
+	redirectRE = regexp.MustCompile(`(?im)^\s*#redirect\s+\[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*$`)
+	mainRE     = regexp.MustCompile(`(?i)\{\{Main\|([^}\|]+)(?:\|[^}]*)?\}\}`)
+	boldRE     = regexp.MustCompile(`'''(.*?)'''`)
+	italicRE   = regexp.MustCompile(`''(.*?)''`)
 )
 
 // runExtract turns one acquired revision into a Markdown article. The raw
@@ -68,6 +72,9 @@ func renderArticle(source rawPage) string {
 		sourceURL = "https://tolkiengateway.net/wiki/" + strings.ReplaceAll(source.Title, " ", "_")
 	}
 	fmt.Fprintf(&b, "source_url: %s\ncontent_sha256: %s\nlicense: CC BY-SA 4.0\n", yamlQuote(sourceURL), hex.EncodeToString(hash[:]))
+	if match := redirectRE.FindStringSubmatch(source.Wikitext); len(match) == 2 {
+		fmt.Fprintf(&b, "redirect: true\nredirect_target: %s\n", yamlQuote(strings.TrimSpace(match[1])))
+	}
 	b.WriteString("source: Tolkien Gateway\n---\n\n")
 	categories := extractCategories(source.Wikitext)
 	if len(categories) == 0 {
@@ -161,6 +168,12 @@ func yamlKey(value string) string {
 
 func wikitextToMarkdown(text string) string {
 	text = commentRE.ReplaceAllString(text, "")
+	text = redirectRE.ReplaceAllString(text, "")
+	text = mainRE.ReplaceAllStringFunc(text, func(value string) string {
+		match := mainRE.FindStringSubmatch(value)
+		title := strings.TrimSpace(match[1])
+		return "See also: [" + title + "](/wiki/" + strings.ReplaceAll(title, " ", "_") + ")."
+	})
 	text = refRE.ReplaceAllStringFunc(text, func(value string) string {
 		if strings.HasSuffix(strings.TrimSpace(value), "/> ") || strings.HasSuffix(strings.TrimSpace(value), "/>") {
 			return ""
@@ -191,8 +204,8 @@ func wikitextToMarkdown(text string) string {
 			out = append(out, strings.Repeat("#", level)+" "+heading)
 			continue
 		}
-		line = strings.ReplaceAll(line, "'''", "**")
-		line = strings.ReplaceAll(line, "''", "*")
+		line = boldRE.ReplaceAllString(line, "**$1**")
+		line = italicRE.ReplaceAllString(line, "*$1*")
 		line = convertLinks(line)
 		line = regexp.MustCompile(`(?i)\[\[File:[^\]]+\]\]`).ReplaceAllStringFunc(line, func(string) string { return "[Image omitted; see original page]" })
 		out = append(out, strings.TrimSpace(line))
