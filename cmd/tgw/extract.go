@@ -14,13 +14,14 @@ import (
 )
 
 var (
-	sectionRE  = regexp.MustCompile(`^(={2,6})\s*(.*?)\s*$`)
-	refRE      = regexp.MustCompile(`(?is)<ref(?:\s[^>]*)?>(.*?)</ref\s*>|<ref\s*/>`)
-	commentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
-	redirectRE = regexp.MustCompile(`(?im)^\s*#redirect\s+\[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*$`)
-	mainRE     = regexp.MustCompile(`(?i)\{\{Main\|([^}\|]+)(?:\|[^}]*)?\}\}`)
-	boldRE     = regexp.MustCompile(`'''(.*?)'''`)
-	italicRE   = regexp.MustCompile(`''(.*?)''`)
+	sectionRE      = regexp.MustCompile(`^(={2,6})\s*(.*?)\s*$`)
+	refRE          = regexp.MustCompile(`(?is)<ref(?:\s[^>]*)?>(.*?)</ref\s*>|<ref\s*/>`)
+	commentRE      = regexp.MustCompile(`(?s)<!--.*?-->`)
+	redirectRE     = regexp.MustCompile(`(?im)^\s*#redirect\s+\[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*$`)
+	mainRE         = regexp.MustCompile(`(?i)\{\{Main\|([^}\|]+)(?:\|[^}]*)?\}\}`)
+	boldRE         = regexp.MustCompile(`'''(.*?)'''`)
+	italicRE       = regexp.MustCompile(`''(.*?)''`)
+	infoboxStartRE = regexp.MustCompile(`(?im)^\s*\{\{\s*(?:infobox\b|album\b|book\b|event\b|film\b|television\b|person\b|character\b)`)
 )
 
 // runExtract turns one acquired revision into a Markdown article. The raw
@@ -122,10 +123,11 @@ func extractCategories(text string) []string {
 }
 
 func extractInfobox(text string) map[string]string {
-	start := strings.Index(strings.ToLower(text), "{{infobox")
-	if start < 0 {
+	match := infoboxStartRE.FindStringIndex(text)
+	if match == nil {
 		return nil
 	}
+	start := match[0]
 	end := strings.Index(text[start:], "\n}}")
 	if end < 0 {
 		end = strings.Index(text[start:], "}}")
@@ -186,12 +188,20 @@ func wikitextToMarkdown(text string) string {
 	})
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	var out []string
+	inInfobox := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "[[Category:") || strings.HasPrefix(trimmed, "{{DEFAULTSORT:") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "{{Infobox") {
+		if infoboxStartRE.MatchString(trimmed) {
+			inInfobox = true
+			continue
+		}
+		if inInfobox {
+			if trimmed == "}}" || strings.HasSuffix(trimmed, "}}") {
+				inInfobox = false
+			}
 			continue
 		}
 		if strings.HasPrefix(trimmed, "|") || trimmed == "}}" {

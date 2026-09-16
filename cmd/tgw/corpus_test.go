@@ -132,6 +132,18 @@ func TestRenderArticleCarriesCategoriesAndInfobox(t *testing.T) {
 	}
 }
 
+func TestRenderArticleCarriesNamedInfobox(t *testing.T) {
+	text := renderArticle(rawPage{Title: "Album", PageID: 3, Revision: 4, Wikitext: "{{album\n| title = Record\n| artist = Someone\n}}\nText."})
+	for _, want := range []string{`infobox:`, `artist: "Someone"`, `title: "Record"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("named infobox missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{album") {
+		t.Fatalf("named infobox leaked into body:\n%s", text)
+	}
+}
+
 func TestRenderArticleCarriesRedirectMetadata(t *testing.T) {
 	text := renderArticle(rawPage{Title: "Bilbo", PageID: 2, Revision: 3, Wikitext: "#REDIRECT [[Bilbo Baggins]]"})
 	for _, want := range []string{`redirect: true`, `redirect_target: "Bilbo Baggins"`} {
