@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -24,23 +26,18 @@ const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 // Cloudflare challenge to clear, and returns the cookies the browser earned.
 // Those cookies are what let a later plain HTTP request through.
 func WarmSession(ctx context.Context, baseURL string) ([]*http.Cookie, error) {
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, append(
-		chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.UserAgent(UserAgent),
-	)...)
-	defer cancelAlloc()
-
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	browserCtx, cancelBrowser := Browser(ctx)
 	defer cancelBrowser()
 
-	browserCtx, cancelTimeout := context.WithTimeout(browserCtx, 60*time.Second)
+	wait := challengeWait()
+	browserCtx, cancelTimeout := context.WithTimeout(browserCtx, wait+15*time.Second)
 	defer cancelTimeout()
 
 	var cookies []*network.Cookie
 	err := chromedp.Run(browserCtx,
 		chromedp.Navigate(baseURL),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			return waitForChallenge(ctx)
+			return WaitForChallenge(ctx)
 		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
@@ -64,11 +61,37 @@ func WarmSession(ctx context.Context, baseURL string) ([]*http.Cookie, error) {
 	return out, nil
 }
 
-// waitForChallenge polls the page title until it stops reading "Just a
+// Browser starts a Chrome session configured from the environment: the
+// persistent profile and headed mode the operator chose. Cancel the returned
+// function to close it.
+func Browser(ctx context.Context) (context.Context, context.CancelFunc) {
+	options := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	options = append(options, chromedp.UserAgent(UserAgent))
+	if profile := os.Getenv("TOLKIENGATEWAY_BROWSER_PROFILE"); profile != "" {
+		options = append(options, chromedp.UserDataDir(profile))
+	}
+	// Headless is the safe default for CI. Set this to false when the session
+	// needs to behave like a user's normal Chrome window and be completed by
+	// the user interactively.
+	if os.Getenv("TOLKIENGATEWAY_BROWSER_HEADLESS") == "false" {
+		options = append(options, chromedp.Flag("headless", false))
+	}
+	if os.Getenv("TOLKIENGATEWAY_BROWSER_NO_SANDBOX") == "true" {
+		options = append(options, chromedp.NoSandbox)
+	}
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, options...)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	return browserCtx, func() {
+		cancelBrowser()
+		cancelAlloc()
+	}
+}
+
+// WaitForChallenge polls the page title until it stops reading "Just a
 // moment...", which is the Cloudflare interstitial's title while it runs
 // its checks. A page that never carried the challenge clears immediately.
-func waitForChallenge(ctx context.Context) error {
-	deadline := time.Now().Add(45 * time.Second)
+func WaitForChallenge(ctx context.Context) error {
+	deadline := time.Now().Add(challengeWait())
 	for {
 		var title string
 		if err := chromedp.Title(&title).Do(ctx); err != nil {
@@ -86,4 +109,13 @@ func waitForChallenge(ctx context.Context) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+func challengeWait() time.Duration {
+	if raw := os.Getenv("TOLKIENGATEWAY_BROWSER_CHALLENGE_WAIT"); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return 45 * time.Second
 }
