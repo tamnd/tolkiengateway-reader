@@ -34,9 +34,56 @@ func runAcquire(args []string) error {
 		return runAcquirePages(args[1:])
 	case "page":
 		return runAcquirePage(args[1:])
+	case "full":
+		return runAcquireFull(args[1:])
 	default:
 		return fmt.Errorf("unknown acquire subcommand %q", subcommand)
 	}
+}
+
+// runAcquireFull performs the initial resumable harvest: inventory, raw
+// revisions, and English Markdown. max-pages is useful for a canary run; zero
+// means the complete inventory.
+func runAcquireFull(args []string) error {
+	fs := flag.NewFlagSet("acquire full", flag.ContinueOnError)
+	base := fs.String("base-url", baseURL, "Tolkien Gateway base URL")
+	root := fs.String("corpus", corpusRoot(), "corpus repository")
+	limit := fs.Int("limit", 500, "allpages batch size, from 1 to 500")
+	maxPages := fs.Int("max-pages", 0, "stop after this many pages; zero means all")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	client, err := fetch.NewClient(ctx, strings.TrimRight(*base, "/"))
+	if err != nil {
+		return fmt.Errorf("warm a session: %w", err)
+	}
+	pages, err := allPages(ctx, client, *limit)
+	if err != nil {
+		return err
+	}
+	if *maxPages > 0 && *maxPages < len(pages) {
+		pages = pages[:*maxPages]
+	}
+	if err := writePageManifest(*root, pages); err != nil {
+		return err
+	}
+	for index, item := range pages {
+		page, err := fetchRawPage(ctx, client, item.Title)
+		if err != nil {
+			return fmt.Errorf("page %d/%d (%s): %w", index+1, len(pages), item.Title, err)
+		}
+		if err := atomicWrite(filepath.Join(*root, "raw", slugTitle(page.Title)+".json"), mustJSON(page)); err != nil {
+			return err
+		}
+		path := filepath.Join(*root, "content", "en", "main", firstLetter(page.Title), slugTitle(page.Title)+".md")
+		if err := atomicWrite(path, []byte(renderArticle(page))); err != nil {
+			return err
+		}
+		fmt.Printf("[%d/%d] %s revision %d\n", index+1, len(pages), page.Title, page.Revision)
+	}
+	fmt.Printf("full harvest complete: %d pages\n", len(pages))
+	return nil
 }
 
 // rawPage is the revision-bearing input shared by acquire page and extract.
@@ -351,8 +398,29 @@ func writePageReport(root string, count int) error {
 	return atomicWrite(filepath.Join(root, "reports", "pages.md"), []byte(body))
 }
 
+// yamlQuote writes a double-quoted YAML scalar, escaping the characters
+// YAML does not allow as they stand: control characters, C1 included,
+// which some wiki titles carry.
 func yamlQuote(value string) string {
-	return "\"" + strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(value, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n") + "\""
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range value {
+		switch {
+		case r == '\\' || r == '"':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r >= 0x7f && r <= 0x9f || r == 0xfeff || r == 0xfffe || r == 0xffff:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func atomicWrite(path string, data []byte) error {

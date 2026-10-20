@@ -6,6 +6,9 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
 	github.com/tamnd/llm v0.1.5
+	github.com/yuin/goldmark v1.8.6
+	golang.org/x/net v0.61.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -14,5 +17,5 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )

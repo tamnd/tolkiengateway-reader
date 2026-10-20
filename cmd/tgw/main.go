@@ -29,6 +29,14 @@ func main() {
 		err = runExtract(os.Args[2:])
 	case "translate":
 		err = runTranslate(os.Args[2:])
+	case "crawl":
+		err = runCrawl(os.Args[2:])
+	case "convert":
+		err = runConvert(os.Args[2:])
+	case "skin":
+		err = runSkin(os.Args[2:])
+	case "sync":
+		err = runSync(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -41,5 +49,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tgw <version|acquire|extract|translate|publish|audit> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: tgw <version|crawl|convert|skin|acquire|extract|translate|sync|publish|audit> [flags]")
 }

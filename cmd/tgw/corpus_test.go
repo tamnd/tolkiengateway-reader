@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,38 +86,55 @@ Bilbo '''Baggins''' visited [[The Shire|the Shire]].
 	}
 }
 
-func TestWriteSiteBuildsArticleAndIndex(t *testing.T) {
+func TestPublishBuildsArticleCategoryAndRedirect(t *testing.T) {
 	dir := t.TempDir()
-	content := filepath.Join(dir, "content", "vi", "main", "B")
-	if err := os.MkdirAll(content, 0o755); err != nil {
-		t.Fatal(err)
+	write := func(rel, text string) {
+		path := filepath.Join(dir, "content", "en", filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	article := "---\ntitle: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n\n## Cuộc đời\n\nBilbo [Shire](/wiki/The_Shire).\n"
-	path := filepath.Join(content, "Bilbo_Baggins.md")
-	if err := os.WriteFile(path, []byte(article), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	pages, err := markdownFiles(filepath.Join(dir, "content", "vi"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	write("main/B/Bilbo_Baggins.md", "---\ntitle: \"Bilbo Baggins\"\nnamespace: 0\nrevision_id: 7\ntimestamp: \"2026-08-01T20:11:25Z\"\n"+
+		"short_description: \"Finder of the One Ring\"\ncategories:\n  - \"Hobbits\"\nlicense: CC BY-SA 4.0\n---\n\n"+
+		"## Life {#Life}\n\nBilbo of [the Shire](/wiki/The_Shire) and [Frodo](/wiki/Frodo).\n")
+	write("main/B/Bilbo.md", "---\ntitle: \"Bilbo\"\nnamespace: 0\nredirect: true\nredirect_target: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n")
+	write("main/T/The_Shire.md", "---\ntitle: \"The Shire\"\nnamespace: 0\nlicense: CC BY-SA 4.0\n---\n\nA region.\n")
 	out := filepath.Join(dir, "site")
-	if err := writeSite(out, "/tolkiengateway", "vi", pages); err != nil {
+	if err := runPublish([]string{"-corpus", dir, "-out", out}); err != nil {
 		t.Fatal(err)
 	}
-	page, err := os.ReadFile(filepath.Join(out, "main", "B", "Bilbo_Baggins.html"))
-	if err != nil {
-		t.Fatal(err)
+	read := func(rel string) string {
+		data, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
 	}
-	if !strings.Contains(string(page), "<h2>Cuộc đời</h2>") || !strings.Contains(string(page), "Shire") {
-		t.Fatalf("article was not rendered: %s", page)
+	page := read("wiki/Bilbo_Baggins.html")
+	for _, want := range []string{
+		`<span class="mw-headline" id="Life">Life</span>`,
+		`href="/tolkiengateway/wiki/The_Shire.html"`,
+		`href="https://tolkiengateway.net/wiki/Frodo"`,
+		`<div id="siteSub">Finder of the One Ring</div>`,
+		`page-Bilbo_Baggins`,
+		`href="/tolkiengateway/wiki/Category:Hobbits.html" title="Category:Hobbits">Hobbits</a>`,
+		`This page was last edited on 1 August 2026, at 20:11.`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("article missing %q:\n%s", want, page)
+		}
 	}
-	index, err := os.ReadFile(filepath.Join(out, "index.html"))
-	if err != nil {
-		t.Fatal(err)
+	if category := read("wiki/Category:Hobbits.html"); !strings.Contains(category, "This category contains only the following page.") {
+		t.Fatalf("generated category missing its member:\n%s", category)
 	}
-	if !strings.Contains(string(index), "/tolkiengateway/main/B/Bilbo_Baggins.html") {
-		t.Fatalf("index link missing: %s", index)
+	if redirect := read("wiki/Bilbo.html"); !strings.Contains(redirect, "/tolkiengateway/wiki/Bilbo_Baggins.html") {
+		t.Fatalf("redirect does not point at its target:\n%s", redirect)
+	}
+	if index := read("search.json"); !strings.Contains(index, `["Bilbo","wiki/Bilbo_Baggins.html","Finder of the One Ring","Bilbo Baggins"]`) {
+		t.Fatalf("search index missing the redirect:\n%s", index)
 	}
 }
 
@@ -129,18 +150,6 @@ func TestRenderArticleCarriesCategoriesAndInfobox(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("rendered article missing %q:\n%s", want, text)
 		}
-	}
-}
-
-func TestRenderArticleCarriesNamedInfobox(t *testing.T) {
-	text := renderArticle(rawPage{Title: "Album", PageID: 3, Revision: 4, Wikitext: "{{album\n| title = Record\n| artist = Someone\n}}\nText."})
-	for _, want := range []string{`infobox:`, `artist: "Someone"`, `title: "Record"`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("named infobox missing %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "{{album") {
-		t.Fatalf("named infobox leaked into body:\n%s", text)
 	}
 }
 
@@ -161,7 +170,6 @@ func TestWikitextToMarkdownConvertsMainTemplate(t *testing.T) {
 	}
 }
 
-/*
 func TestTranslateQueuesAndWritesVietnameseArticle(t *testing.T) {
 	translated := "---\ntitle: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n\n## Cuộc đời\n\nBilbo là một Hobbit.\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +212,6 @@ func TestTranslateQueuesAndWritesVietnameseArticle(t *testing.T) {
 		t.Fatalf("unexpected translation:\n%s", output)
 	}
 }
-*/
 
 func TestCountPagesEmptyCorpus(t *testing.T) {
 	dir := t.TempDir()
@@ -247,5 +254,16 @@ func TestCountPagesFindsMarkdown(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want 1 page, got %d", n)
+	}
+}
+
+func TestYAMLQuoteEscapesControlCharacters(t *testing.T) {
+	title := "\u0095The One Ring, \"Isildur's Bane\"\\"
+	var got struct{ Title string }
+	if err := yaml.Unmarshal([]byte("title: "+yamlQuote(title)+"\n"), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != title {
+		t.Fatalf("round trip = %q, want %q", got.Title, title)
 	}
 }

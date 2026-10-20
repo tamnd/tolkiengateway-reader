@@ -1,0 +1,14 @@
+/* Rules the reader needs beyond the wiki's own stylesheet. */
+.citizen-search__clear[hidden],
+.citizen-typeahead-group[hidden],
+.citizen-typeahead-placeholder[hidden] {
+	display: none;
+}
+
+.citizen-search__clear {
+	cursor: pointer;
+}
+
+#tgw-notfound {
+	font-size: var(--font-size-large, 1.125rem);
+}

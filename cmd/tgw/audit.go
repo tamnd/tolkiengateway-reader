@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -13,10 +15,10 @@ import (
 // For now it records the page count so the report file exists from the
 // first commit onward.
 func runAudit(args []string) error {
-	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
-	lang := fs.String("lang", "vi", "language directory to audit")
-	corpus := fs.String("corpus", corpusRoot(), "corpus repository")
-	if err := fs.Parse(args); err != nil {
+	flags := flag.NewFlagSet("audit", flag.ContinueOnError)
+	lang := flags.String("lang", "en", "language directory to audit")
+	corpus := flags.String("corpus", corpusRoot(), "corpus repository")
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
@@ -58,4 +60,23 @@ func runAudit(args []string) error {
 	}
 	fmt.Printf("audit: %d %s pages, no hard failures\n", len(files), *lang)
 	return nil
+}
+
+// markdownFiles lists the corpus pages below root, sorted.
+func markdownFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".md") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
 }
