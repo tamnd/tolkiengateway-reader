@@ -5,7 +5,7 @@
  * the sticky header and CategoryTree. The markup it writes is the markup
  * those modules write, so the vendored stylesheet styles it unchanged.
  */
-(function () {
+function tgwInit() {
 	'use strict';
 
 	var doc = document, body = doc.body, root = doc.documentElement;
@@ -495,4 +495,50 @@
 
 	requestAnimationFrame(function () { root.classList.add('citizen-animations-ready'); });
 	if (page) updateThemeColor();
+}
+
+/*
+ * A page not yet translated carries no body of its own. Its English copy
+ * is fetched and its content, table of contents and links are moved into
+ * this page before the rest of the script runs.
+ */
+(function () {
+	var stub = document.querySelector('.tgw-borrow');
+	if (!stub || !window.fetch || !window.DOMParser) { tgwInit(); return; }
+	var src = stub.getAttribute('data-src');
+	var en = (TGW.langs || []).filter(function (l) { return l.c === 'en'; })[0];
+	fetch(src).then(function (r) {
+		if (!r.ok) throw new Error(r.status);
+		return r.text();
+	}).then(function (html) {
+		var other = new DOMParser().parseFromString(html, 'text/html');
+		var text = other.getElementById('mw-content-text');
+		if (!text) throw new Error('no content');
+		Array.prototype.forEach.call(text.querySelectorAll('.printfooter'), function (n) { n.remove(); });
+		Array.prototype.forEach.call(text.childNodes, function (n) {
+			stub.parentNode.insertBefore(document.importNode(n, true), stub);
+		});
+		stub.remove();
+		var toc = other.getElementById('citizen-toc');
+		var sidebar = document.querySelector('.citizen-page-sidebar');
+		if (toc && sidebar) {
+			sidebar.appendChild(document.importNode(toc, true));
+			document.getElementById('content').classList.add('citizen-toc-enabled');
+			Array.prototype.forEach.call(document.querySelectorAll('#citizen-toc .citizen-menu__heading, #citizen-toc summary > span:last-child, #citizen-toc .citizen-toc-top .citizen-toc-text'), function (n) {
+				n.textContent = tgwT(n.textContent);
+			});
+			var summary = document.querySelector('#citizen-toc summary');
+			if (summary) summary.title = tgwT(summary.title);
+		}
+		if (en) {
+			var from = en.b + '/';
+			Array.prototype.forEach.call(document.querySelectorAll('#mw-content-text a[href^="' + from + '"]'), function (a) {
+				a.setAttribute('href', TGW.base + '/' + a.getAttribute('href').slice(from.length));
+			});
+		}
+		if (location.hash) {
+			var target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+			if (target) target.scrollIntoView();
+		}
+	}).catch(function () {}).then(tgwInit);
 })();

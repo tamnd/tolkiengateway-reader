@@ -31,6 +31,9 @@ type renderedPage struct {
 	toc     string // the sidebar table of contents, or ""
 	// untranslated marks a page shown in English in another language's site.
 	untranslated bool
+	// borrow is the URL of the English page whose body tgw.js loads in
+	// place of content, for a page not yet translated.
+	borrow string
 }
 
 type tocEntry struct {

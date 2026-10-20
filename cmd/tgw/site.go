@@ -645,6 +645,14 @@ func (s *site) renderPage(p *sitePage) (string, error) {
 			untranslated = true
 		}
 	}
+	// An untranslated page whose English copy is also published borrows
+	// that copy's body in the browser, so the site does not carry every
+	// page twice.
+	if untranslated {
+		if en, ok := s.languageBase("en"); ok {
+			return s.document(p, renderedPage{borrow: en + "/" + p.Path, untranslated: true}), nil
+		}
+	}
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return "", err
@@ -704,4 +712,14 @@ func servedPage(a, b *sitePage) (keep, drop *sitePage) {
 		return b, a
 	}
 	return a, b
+}
+
+// languageBase returns the base URL a published language is served at.
+func (s *site) languageBase(code string) (string, bool) {
+	for _, l := range s.langs {
+		if l.Code == code {
+			return l.Base, true
+		}
+	}
+	return "", false
 }
