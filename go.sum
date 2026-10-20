@@ -16,8 +16,8 @@ github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80 h1:6Yzfa6GP0rIo/kUL
 github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80/go.mod h1:imJHygn/1yfhB7XSJJKlFZKl/J+dCPAknuiaGOshXAs=
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde h1:x0TT0RDC7UhAVbbWWBzr41ElhJx5tXPWkIHA2HWPRuw=
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
-github.com/tamnd/llm v0.1.5 h1:eWZ6TQCjUnUkesMqHFKeLDFJ6UhnlNwlVzdGXa6/VSk=
-github.com/tamnd/llm v0.1.5/go.mod h1:1PKUw3AqMTFJygbwpo/xAcRXJXctUKNRHw5Jnz+wnPQ=
+github.com/tamnd/llm v0.1.6 h1:BkH2aMuu07feecN0Zqbi46LGOhrW511kA5vqtb3pSsE=
+github.com/tamnd/llm v0.1.6/go.mod h1:1PKUw3AqMTFJygbwpo/xAcRXJXctUKNRHw5Jnz+wnPQ=
 github.com/yuin/goldmark v1.8.6 h1:d0VcaP1sx9GkFVkoW+KtggpGi2KZ965i14b0+bDQST4=
 github.com/yuin/goldmark v1.8.6/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
 golang.org/x/net v0.61.0 h1:RR+6j/BTBCrggOLugxa+66R8FvoN6MHlzDlZIbN9YFw=

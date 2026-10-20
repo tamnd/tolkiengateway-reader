@@ -1,11 +1,11 @@
 module github.com/tamnd/tolkiengateway-reader
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
-	github.com/tamnd/llm v0.1.5
+	github.com/tamnd/llm v0.1.6
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/net v0.61.0
 	gopkg.in/yaml.v3 v3.0.1
