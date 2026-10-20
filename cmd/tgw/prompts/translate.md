@@ -1,12 +1,12 @@
-Translate the Markdown article below from English into Vietnamese.
+Translate the Markdown fragment below, part of a Tolkien Gateway wiki article, from English into {{LANGUAGE}}.
 
 Rules:
-- Return only the complete Markdown document. Do not add a preamble or explanation.
-- Preserve the YAML front matter keys, values, hashes, URLs, page ids, revision ids, and license text exactly.
-- Preserve headings, links, reference blocks, code, list structure, and paragraph boundaries.
-- Translate article prose, headings, link labels, and ordinary table text naturally into Vietnamese.
-- Keep Tolkien names, invented words, quotations, and proper nouns consistent. Use the glossary when supplied.
-- Do not translate URLs, Markdown syntax, front matter keys, or hash values.
+- Return only the translated fragment. Do not add a preamble, an explanation, or code fences.
+- Keep every heading at its level and keep its `{#anchor}` exactly as written.
+- Keep link targets, the part inside `(...)`, and link titles in quotes unchanged. Translate only the visible link text.
+- Keep inline HTML tags and their attributes, such as `<sup>`, `<span>`, and `<br>`, exactly as written. Translate only the text between tags.
+- Keep list structure, tables, blank lines, and paragraph boundaries.
+- Keep Tolkien names and invented words (Elvish, Dwarvish, and so on) as they are. Keep book titles in their original English form.
+- Translate prose, headings, captions, and ordinary table text naturally.
 
-Target language: {{LANGUAGE}}
 Glossary: {{GLOSSARY}}

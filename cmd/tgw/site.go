@@ -260,11 +260,21 @@ func (s *site) load(root string) error {
 	s.byTitle = make(map[string]*sitePage, len(s.pages))
 	for _, p := range s.pages {
 		if prev, ok := s.byTitle[p.Meta.Title]; ok {
-			return fmt.Errorf("%s and %s are both %q", prev.Source, p.Source, p.Meta.Title)
+			keep, drop := servedPage(prev, p)
+			fmt.Fprintf(os.Stderr, "publish: %s and %s are both %q; keeping %s\n", prev.Source, p.Source, p.Meta.Title, keep.Source)
+			drop.Path = ""
+			p = keep
 		}
 		s.byTitle[p.Meta.Title] = p
 		p.Path = "wiki/" + titleFilePath(p.Meta.Title) + ".html"
 	}
+	kept := s.pages[:0]
+	for _, p := range s.pages {
+		if p.Path != "" {
+			kept = append(kept, p)
+		}
+	}
+	s.pages = kept
 	s.categories = map[string][]categoryMember{}
 	s.fileUsage = map[string][]*sitePage{}
 	for _, p := range s.pages {
@@ -635,6 +645,14 @@ func (s *site) renderPage(p *sitePage) (string, error) {
 			untranslated = true
 		}
 	}
+	// An untranslated page whose English copy is also published borrows
+	// that copy's body in the browser, so the site does not carry every
+	// page twice.
+	if untranslated {
+		if en, ok := s.languageBase("en"); ok {
+			return s.document(p, renderedPage{borrow: en + "/" + p.Path, untranslated: true}), nil
+		}
+	}
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return "", err
@@ -674,4 +692,34 @@ func (s *site) redirectDocument(p *sitePage) string {
 func jsString(s string) string {
 	b, _ := json.Marshal(s)
 	return strings.ReplaceAll(string(b), "</", `<\/`)
+}
+
+// servedPage picks which of two pages with the same title the wiki serves.
+// A main-namespace page created before its namespace existed, such as an
+// old "Portal:Locations" article, is shadowed by the namespaced page, so
+// the page whose namespace prefix matches its title wins. Otherwise the
+// later revision does.
+func servedPage(a, b *sitePage) (keep, drop *sitePage) {
+	owns := func(p *sitePage) bool {
+		return p.Meta.Namespace != 0 && strings.HasPrefix(p.Meta.Title, namespacePrefix(p.Meta.Namespace))
+	}
+	switch {
+	case owns(a) && !owns(b):
+		return a, b
+	case owns(b) && !owns(a):
+		return b, a
+	case b.Meta.Revision > a.Meta.Revision:
+		return b, a
+	}
+	return a, b
+}
+
+// languageBase returns the base URL a published language is served at.
+func (s *site) languageBase(code string) (string, bool) {
+	for _, l := range s.langs {
+		if l.Code == code {
+			return l.Base, true
+		}
+	}
+	return "", false
 }

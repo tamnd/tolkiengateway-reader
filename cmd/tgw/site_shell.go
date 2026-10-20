@@ -103,6 +103,9 @@ func (s *site) document(p *sitePage, r renderedPage) string {
 		b.WriteString(`<div class="mw-message-box mw-message-box-warning tgw-untranslated" lang="` + s.lang + `"><p>` + s.ui("This page has not been translated into Vietnamese yet. It is shown in English.") + `</p></div>`)
 	}
 	b.WriteString(r.content)
+	if r.borrow != "" {
+		b.WriteString(`<div class="tgw-borrow" data-src="` + htmlEscape(r.borrow) + `"><p><a href="` + htmlEscape(r.borrow) + `" lang="en">` + htmlEscape(m.Title) + `</a></p></div>`)
+	}
 	if m.Revision > 0 {
 		permalink := htmlEscape(permanentLink(m.Title, m.Revision))
 		b.WriteString(`<div class="printfooter" data-nosnippet="">` + s.uif("Retrieved from \"%s\"", `<a dir="ltr" href="`+permalink+`">`+permalink+`</a>`) + `</div>`)
@@ -119,7 +122,7 @@ func (s *site) document(p *sitePage, r renderedPage) string {
 	b.WriteString("</div>\n")
 
 	b.WriteString(`<footer class="citizen-page-footer">`)
-	if ns >= 0 {
+	if ns >= 0 && r.borrow == "" {
 		b.WriteString(s.catlinks(m))
 	}
 	b.WriteString(`<div class="page-info">`)

@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,7 @@ func runTranslate(args []string) error {
 	routeFile := fs.String("routes", "", "llm route registry; defaults to Tolkien Gateway config")
 	workers := fs.Int("workers", 0, "parallel translation workers; defaults to fleet capacity")
 	noTunnels := fs.Bool("no-tunnels", false, "do not start SSH tunnels; use already-running local endpoints")
+	dirs := fs.String("dirs", "main", "comma-separated namespace directories under content/<source-lang> to translate")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,7 +70,7 @@ func runTranslate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA); err != nil {
+	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA, strings.Split(*dirs, ",")); err != nil {
 		return err
 	}
 	if *workers <= 0 {
@@ -174,9 +177,21 @@ func healthCheck(endpoint string) func(context.Context) error {
 	}
 }
 
-func enqueueTranslations(q *queue.Queue, root, sourceLang, targetLang, promptSHA string) error {
+// enqueueTranslations queues every page in the chosen namespace
+// directories. Redirects are skipped: the site draws them from the source
+// page's front matter, so they have no text to translate.
+func enqueueTranslations(q *queue.Queue, root, sourceLang, targetLang, promptSHA string, dirs []string) error {
 	base := filepath.Join(root, "content", sourceLang)
-	return filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+	for _, dir := range dirs {
+		if err := enqueueDir(q, root, base, filepath.Join(base, strings.TrimSpace(dir)), targetLang, promptSHA); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func enqueueDir(q *queue.Queue, root, base, dir, targetLang, promptSHA string) error {
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -186,6 +201,9 @@ func enqueueTranslations(q *queue.Queue, root, sourceLang, targetLang, promptSHA
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if strings.Contains(frontMatter(string(data)), "\nredirect: true\n") {
+			return nil
 		}
 		sum := sha256.Sum256(data)
 		rel, err := filepath.Rel(base, path)
@@ -205,7 +223,7 @@ func enqueueTranslations(q *queue.Queue, root, sourceLang, targetLang, promptSHA
 
 func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log *ledger.Log, instruction, targetLang string) error {
 	for {
-		job, err := q.Lease("translate", runtime.GOOS, "", 20*time.Minute)
+		job, err := q.Lease("translate", runtime.GOOS, "", time.Hour)
 		if errors.Is(err, queue.ErrEmpty) {
 			return nil
 		}
@@ -220,33 +238,21 @@ func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log 
 			}
 			continue
 		}
-		r, client, release, err := pool.Pick(ctx)
-		if err != nil {
+		output, err := translateDocument(ctx, pool, log, job, instruction, string(input))
+		if errors.Is(err, errNoRoute) {
 			_ = q.Release(job, err.Error())
 			return err
 		}
-		started := time.Now()
-		response, callErr := client.Complete(ctx, llm.Request{Model: r.Wire(), Instructions: instruction, Input: string(input)})
-		response.Text = strings.TrimSpace(response.Text) + "\n"
-		response.Route = r.Name
-		response.Elapsed = time.Since(started)
-		release()
-		_ = log.Record("translate", job.Target, r.Name, job.Attempts, response, callErr)
-		if callErr != nil {
-			pool.Fail(r.Name, callErr)
-			if _, err := q.Fail(job, callErr.Error()); err != nil {
-				return err
-			}
-			continue
+		if err == nil {
+			err = validateTranslation(string(input), output, targetLang)
 		}
-		pool.Succeed(r.Name)
-		if err := validateTranslation(string(input), response.Text, targetLang); err != nil {
+		if err != nil {
 			if _, finishErr := q.Fail(job, err.Error()); finishErr != nil {
 				return finishErr
 			}
 			continue
 		}
-		if err := atomicWrite(job.Meta["output"], []byte(response.Text)); err != nil {
+		if err := atomicWrite(job.Meta["output"], []byte(output)); err != nil {
 			if _, finishErr := q.Finish(job, false, err.Error()); finishErr != nil {
 				return finishErr
 			}
@@ -268,7 +274,7 @@ func validateTranslation(source, text, targetLang string) error {
 	if sourceFrontMatter, outputFrontMatter := frontMatter(source), frontMatter(text); sourceFrontMatter != outputFrontMatter {
 		return fmt.Errorf("translation output changed YAML front matter")
 	}
-	if targetLang == "vi" && strings.Contains(strings.ToLower(text), "translate the markdown article") {
+	if targetLang == "vi" && strings.Contains(strings.ToLower(text), "translate the markdown fragment") {
 		return fmt.Errorf("translation output contains prompt text")
 	}
 	return nil
@@ -283,4 +289,202 @@ func frontMatter(text string) string {
 		return text[:end+9]
 	}
 	return ""
+}
+
+// errNoRoute means no translation route can take work right now.
+var errNoRoute = errors.New("no translation route available")
+
+// maxChunk caps the prose sent in one request. Whole articles run to
+// hundreds of kilobytes, too long for one reliable answer.
+const maxChunk = 6 << 10
+
+// translationChunk is one piece of a page body. Verbatim chunks, raw HTML
+// such as infoboxes and style blocks, are copied unchanged.
+type translationChunk struct {
+	text     string
+	verbatim bool
+}
+
+// translateDocument translates a page body chunk by chunk and puts it back
+// behind the unchanged front matter.
+func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, instruction, document string) (string, error) {
+	document = strings.ReplaceAll(document, "\r\n", "\n")
+	head := frontMatter(document)
+	var out strings.Builder
+	out.WriteString(head)
+	for i, chunk := range splitTranslation(document[len(head):]) {
+		if chunk.verbatim || strings.TrimSpace(chunk.text) == "" {
+			out.WriteString(chunk.text)
+			continue
+		}
+		text, err := translateChunk(ctx, pool, log, job, i, instruction, chunk.text)
+		if err != nil {
+			return "", err
+		}
+		out.WriteString(text)
+	}
+	return out.String(), nil
+}
+
+func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, index int, instruction, source string) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		r, client, release, err := pool.Pick(ctx)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", errNoRoute, err)
+		}
+		started := time.Now()
+		response, callErr := client.Complete(ctx, llm.Request{Model: r.Wire(), Instructions: instruction, Input: source})
+		response.Route = r.Name
+		response.Elapsed = time.Since(started)
+		release()
+		_ = log.Record("translate", fmt.Sprintf("%s#%d", job.Target, index), r.Name, attempt, response, callErr)
+		if callErr != nil {
+			pool.Fail(r.Name, callErr)
+			lastErr = callErr
+			continue
+		}
+		pool.Succeed(r.Name)
+		text := matchSpacing(source, unfence(response.Text))
+		if err := validateChunk(source, text); err != nil {
+			lastErr = err
+			continue
+		}
+		return text, nil
+	}
+	return "", fmt.Errorf("chunk %d: %w", index, lastErr)
+}
+
+// splitTranslation cuts a page body into chunks. Blocks of raw HTML, which
+// start with a tag and run to a blank line, are kept verbatim. Prose is
+// grouped by section and capped at maxChunk.
+func splitTranslation(body string) []translationChunk {
+	var chunks []translationChunk
+	var prose strings.Builder
+	flush := func() {
+		if prose.Len() > 0 {
+			chunks = append(chunks, translationChunk{text: prose.String()})
+			prose.Reset()
+		}
+	}
+	for _, block := range splitBlocks(body) {
+		if isRawHTML(block) {
+			flush()
+			if n := len(chunks); n > 0 && chunks[n-1].verbatim {
+				chunks[n-1].text += block
+			} else {
+				chunks = append(chunks, translationChunk{text: block, verbatim: true})
+			}
+			continue
+		}
+		if prose.Len() > 0 && (strings.HasPrefix(block, "## ") || prose.Len()+len(block) > maxChunk) {
+			flush()
+		}
+		prose.WriteString(block)
+	}
+	flush()
+	return chunks
+}
+
+// splitBlocks splits text after each run of blank lines, so every block
+// keeps its trailing blank lines and joining the blocks gives back the text.
+func splitBlocks(text string) []string {
+	var blocks []string
+	lines := strings.SplitAfter(text, "\n")
+	start, blank := 0, false
+	pos := 0
+	for _, line := range lines {
+		isBlank := strings.TrimSpace(line) == ""
+		if blank && !isBlank {
+			blocks = append(blocks, text[start:pos])
+			start = pos
+		}
+		blank = isBlank
+		pos += len(line)
+	}
+	if start < len(text) {
+		blocks = append(blocks, text[start:])
+	}
+	return blocks
+}
+
+var leadingTag = regexp.MustCompile(`^<(/?[a-zA-Z][a-zA-Z0-9]*)`)
+
+// isRawHTML reports whether a block is HTML the site renders as is. Inline
+// tags that open a paragraph, like <sup> or <span>, do not count.
+func isRawHTML(block string) bool {
+	m := leadingTag.FindStringSubmatch(strings.TrimSpace(block))
+	if m == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimPrefix(m[1], "/")) {
+	case "sup", "sub", "span", "a", "b", "i", "em", "strong", "small", "abbr", "br", "code", "s", "u":
+		return false
+	}
+	return true
+}
+
+var (
+	chunkHeading = regexp.MustCompile(`(?m)^(#{1,6}) .*?(\{#[^}]*\})?\s*$`)
+	chunkLink    = regexp.MustCompile(`\]\(([^)\s]+)`)
+	chunkTag     = regexp.MustCompile(`</?([a-zA-Z][a-zA-Z0-9]*)`)
+)
+
+// validateChunk checks that a translation kept the fragment's structure:
+// heading levels and anchors, link targets, and inline tags.
+func validateChunk(source, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("translation is empty")
+	}
+	if a, b := headingShape(source), headingShape(text); a != b {
+		return fmt.Errorf("headings changed: %q became %q", a, b)
+	}
+	if a, b := matchList(chunkLink, source), matchList(chunkLink, text); a != b {
+		return fmt.Errorf("link targets changed")
+	}
+	if a, b := matchList(chunkTag, source), matchList(chunkTag, text); a != b {
+		return fmt.Errorf("inline HTML changed")
+	}
+	if n, m := len(source), len([]rune(text)); m < n/4 {
+		return fmt.Errorf("translation is too short: %d characters for %d", m, n)
+	}
+	return nil
+}
+
+func headingShape(text string) string {
+	var parts []string
+	for _, m := range chunkHeading.FindAllStringSubmatch(text, -1) {
+		parts = append(parts, m[1]+m[2])
+	}
+	return strings.Join(parts, " ")
+}
+
+// matchList returns the first group of every match, sorted, so a
+// translation may reorder links within a sentence.
+func matchList(re *regexp.Regexp, text string) string {
+	var parts []string
+	for _, m := range re.FindAllStringSubmatch(text, -1) {
+		parts = append(parts, m[1])
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
+}
+
+// unfence drops a code fence some models wrap around their answer.
+func unfence(text string) string {
+	t := strings.TrimSpace(text)
+	if strings.HasPrefix(t, "```") && strings.HasSuffix(t, "```") {
+		if i := strings.Index(t, "\n"); i >= 0 {
+			t = strings.TrimSpace(strings.TrimSuffix(t[i+1:], "```"))
+		}
+	}
+	return t
+}
+
+// matchSpacing gives the translation the source's leading and trailing
+// whitespace, so chunks join back with the same blank lines.
+func matchSpacing(source, text string) string {
+	lead := source[:len(source)-len(strings.TrimLeft(source, " \t\n"))]
+	trail := source[len(strings.TrimRight(source, " \t\n")):]
+	return lead + strings.TrimSpace(text) + trail
 }

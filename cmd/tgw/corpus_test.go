@@ -178,6 +178,13 @@ func TestTranslateQueuesAndWritesVietnameseArticle(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
 		case "/v1/chat/completions":
+			// Only the body is sent; the front matter never leaves the corpus.
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "license:") {
+				http.Error(w, "front matter was sent", http.StatusBadRequest)
+				return
+			}
+			translated := "```markdown\n## Cuộc đời\n\nBilbo là một Hobbit.\n```"
 			w.Header().Set("Content-Type", "text/event-stream")
 			chunk, _ := json.Marshal(map[string]any{"id": "test", "model": "test-model", "choices": []any{map[string]any{"delta": map[string]string{"content": translated}}}})
 			_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n", chunk)
