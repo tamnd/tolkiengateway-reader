@@ -530,9 +530,21 @@ function tgwInit() {
 			var summary = document.querySelector('#citizen-toc summary');
 			if (summary) summary.title = tgwT(summary.title);
 		}
+		var cats = other.getElementById('catlinks');
+		var footer = document.querySelector('.citizen-page-footer');
+		if (cats && footer) {
+			cats = document.importNode(cats, true);
+			var label = cats.querySelector('#mw-normal-catlinks > a');
+			if (label) label.textContent = tgwT(label.textContent);
+			var hidden = cats.querySelector('#mw-hidden-catlinks');
+			if (hidden && hidden.firstChild && hidden.firstChild.nodeType === 3) {
+				hidden.firstChild.textContent = tgwT(hidden.firstChild.textContent.trim()) + ' ';
+			}
+			footer.insertBefore(cats, footer.firstChild);
+		}
 		if (en) {
 			var from = en.b + '/';
-			Array.prototype.forEach.call(document.querySelectorAll('#mw-content-text a[href^="' + from + '"]'), function (a) {
+			Array.prototype.forEach.call(document.querySelectorAll('#mw-content-text a[href^="' + from + '"], #catlinks a[href^="' + from + '"]'), function (a) {
 				a.setAttribute('href', TGW.base + '/' + a.getAttribute('href').slice(from.length));
 			});
 		}

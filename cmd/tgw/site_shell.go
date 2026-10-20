@@ -122,7 +122,7 @@ func (s *site) document(p *sitePage, r renderedPage) string {
 	b.WriteString("</div>\n")
 
 	b.WriteString(`<footer class="citizen-page-footer">`)
-	if ns >= 0 {
+	if ns >= 0 && r.borrow == "" {
 		b.WriteString(s.catlinks(m))
 	}
 	b.WriteString(`<div class="page-info">`)
