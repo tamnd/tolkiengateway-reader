@@ -105,3 +105,14 @@ func TestUnlinkURLsUndoesChatGPTLinks(t *testing.T) {
 		t.Fatalf("unlinkURLs:\n got %s\nwant %s", got, want)
 	}
 }
+
+func TestUnescapeMarksKeepsEmphasis(t *testing.T) {
+	source := "The *[olvar](../O/Olvar.md)*"
+	got := unescapeMarks(source, "Các \\*[olvar](../O/Olvar.md)\\*")
+	if want := "Các *[olvar](../O/Olvar.md)*"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := unescapeMarks("a \\_b", "x \\_y \\*z"); got != "x \\_y *z" {
+		t.Errorf("got %q", got)
+	}
+}

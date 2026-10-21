@@ -345,7 +345,7 @@ func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job 
 			continue
 		}
 		pool.Succeed(r.Name)
-		text := matchSpacing(source, unlinkURLs(source, unfence(response.Text)))
+		text := matchSpacing(source, unescapeMarks(source, unlinkURLs(source, unfence(response.Text))))
 		if err := validateChunk(source, text); err != nil {
 			lastErr = err
 			continue
@@ -544,6 +544,19 @@ func markdownUnescape(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+// unescapeMarks drops the backslashes ChatGPT puts before emphasis and
+// link brackets, which turn *[olvar](…)* into literal asterisks around a
+// link. An escape the source itself uses is kept.
+func unescapeMarks(source, text string) string {
+	for _, c := range "*_[]" {
+		esc := `\` + string(c)
+		if !strings.Contains(source, esc) {
+			text = strings.ReplaceAll(text, esc, string(c))
+		}
+	}
+	return text
 }
 
 // matchSpacing gives the translation the source's leading and trailing
