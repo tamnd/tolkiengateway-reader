@@ -99,7 +99,13 @@ func TestPublishBuildsArticleCategoryAndRedirect(t *testing.T) {
 	}
 	write("main/B/Bilbo_Baggins.md", "---\ntitle: \"Bilbo Baggins\"\nnamespace: 0\nrevision_id: 7\ntimestamp: \"2026-08-01T20:11:25Z\"\n"+
 		"short_description: \"Finder of the One Ring\"\ncategories:\n  - \"Hobbits\"\nlicense: CC BY-SA 4.0\n---\n\n"+
-		"## Life {#Life}\n\nBilbo of [the Shire](/wiki/The_Shire) and [Frodo](/wiki/Frodo).\n")
+		"## Life {#Life}\n\nBilbo of [the Shire](../T/The_Shire.md) and [Frodo](https://tolkiengateway.net/wiki/Frodo), see [Bilbo](Bilbo.md).\n")
+	if err := os.MkdirAll(filepath.Join(dir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "assets", "templatestyles.css"), []byte(".mw-parser-output .x{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	write("main/B/Bilbo.md", "---\ntitle: \"Bilbo\"\nnamespace: 0\nredirect: true\nredirect_target: \"Bilbo Baggins\"\nlicense: CC BY-SA 4.0\n---\n")
 	write("main/T/The_Shire.md", "---\ntitle: \"The Shire\"\nnamespace: 0\nlicense: CC BY-SA 4.0\n---\n\nA region.\n")
 	out := filepath.Join(dir, "site")
@@ -116,8 +122,10 @@ func TestPublishBuildsArticleCategoryAndRedirect(t *testing.T) {
 	page := read("wiki/Bilbo_Baggins.html")
 	for _, want := range []string{
 		`<span class="mw-headline" id="Life">Life</span>`,
-		`href="/tolkiengateway/wiki/The_Shire.html"`,
-		`href="https://tolkiengateway.net/wiki/Frodo"`,
+		`href="/tolkiengateway/wiki/The_Shire.html" title="The Shire"`,
+		`href="https://tolkiengateway.net/wiki/Frodo" title="Frodo"`,
+		`href="/tolkiengateway/wiki/Bilbo_Baggins.html" title="Bilbo"`,
+		`href="/tolkiengateway/skin/templatestyles.css"`,
 		`<div id="siteSub">Finder of the One Ring</div>`,
 		`page-Bilbo_Baggins`,
 		`href="/tolkiengateway/wiki/Category:Hobbits.html" title="Category:Hobbits">Hobbits</a>`,

@@ -55,6 +55,7 @@ func runConvert(args []string) error {
 		}
 	}
 	paths := corpusPaths(items)
+	links := newCorpusLinks(items, paths)
 	outRoot := filepath.Join(*root, "content", *lang)
 	written := map[string]bool{}
 	missing, converted := 0, 0
@@ -65,7 +66,7 @@ func runConvert(args []string) error {
 		}
 		var doc string
 		if item.Redirect {
-			doc = renderRedirect(item)
+			doc = renderRedirect(item, links, rel)
 		} else {
 			path, ok := files[item.PageID]
 			if !ok {
@@ -82,7 +83,7 @@ func runConvert(args []string) error {
 					file = &r
 				}
 			}
-			doc = renderPageMarkdown(page, item.Props, file)
+			doc = renderPageMarkdown(page, item.Props, file, links, rel)
 		}
 		target := filepath.Join(outRoot, filepath.FromSlash(rel))
 		written[target] = true
@@ -94,6 +95,9 @@ func runConvert(args []string) error {
 			return err
 		}
 		converted++
+	}
+	if err := links.writeTemplateStyles(*root); err != nil {
+		return err
 	}
 	pruned := 0
 	if *prune {
@@ -159,7 +163,7 @@ func wikiURL(title string) string {
 	return "/wiki/" + strings.ReplaceAll(title, " ", "_")
 }
 
-func renderRedirect(item inventoryItem) string {
+func renderRedirect(item inventoryItem, links *corpusLinks, rel string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "title: %s\n", yamlQuote(item.Title))
@@ -175,20 +179,33 @@ func renderRedirect(item inventoryItem) string {
 	if item.Fragment != "" {
 		target += "#" + strings.ReplaceAll(item.Fragment, " ", "_")
 	}
+	if links != nil {
+		target = links.href(rel, target)
+	}
+	if strings.ContainsAny(target, "() ") {
+		target = "<" + target + ">"
+	}
 	fmt.Fprintf(&b, "Redirect to [%s](%s).\n", escapeMarkdown(item.Target), target)
 	return b.String()
+}
+
+// plainDisplayTitle reports whether a display title is only what the site
+// shows for the title anyway, MediaWiki's default title spans.
+func plainDisplayTitle(display, title string, ns int) bool {
+	plain := html.UnescapeString(display)
+	return plain == title || plain == html.UnescapeString(pageHeading(pageMeta{Title: title, Namespace: ns}))
 }
 
 // pageFlags are the behaviour switches carried over from the page
 // properties, written as booleans named after their magic words.
 var pageFlags = []string{"notoc", "forcetoc", "notitle", "nogallery"}
 
-func renderPageMarkdown(page crawledPage, props map[string]string, file *imageRecord) string {
+func renderPageMarkdown(page crawledPage, props map[string]string, file *imageRecord, links *corpusLinks, rel string) string {
 	hash := sha256.Sum256([]byte(page.Wikitext))
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "title: %s\n", yamlQuote(page.Title))
-	if display := page.DisplayTitle; display != "" && display != html.EscapeString(page.Title) && display != page.Title {
+	if display := page.DisplayTitle; display != "" && !plainDisplayTitle(display, page.Title, page.Namespace) {
 		fmt.Fprintf(&b, "display_title: %s\n", yamlQuote(display))
 	}
 	fmt.Fprintf(&b, "page_id: %d\nnamespace: %d\nrevision_id: %d\n", page.PageID, page.Namespace, page.Revision)
@@ -252,7 +269,7 @@ func renderPageMarkdown(page crawledPage, props map[string]string, file *imageRe
 			fmt.Fprintf(&b, "  user: %s\n", yamlQuote(file.User))
 		}
 	}
-	body, infobox := htmlToMarkdown(page.HTML)
+	body, infobox := htmlToMarkdown(page.HTML, links, rel)
 	if len(infobox) > 0 {
 		b.WriteString("infobox:\n")
 		for _, field := range infobox {
@@ -276,7 +293,8 @@ func writeCategoryList(b *strings.Builder, key string, categories []crawlCategor
 
 // htmlToMarkdown converts MediaWiki parser output. It also returns the
 // label/value rows of the first infobox, as plain text, for the front matter.
-func htmlToMarkdown(source string) (string, [][2]string) {
+// With links, URLs are rewritten for a page written at rel.
+func htmlToMarkdown(source string, links *corpusLinks, rel string) (string, [][2]string) {
 	nodes, err := html.ParseFragment(strings.NewReader(source), &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div})
 	if err != nil {
 		return rawHTMLBlock(source) + "\n", nil
@@ -289,6 +307,9 @@ func htmlToMarkdown(source string) (string, [][2]string) {
 		root = nodes[0]
 	}
 	cleanTree(root)
+	if links != nil {
+		links.rewrite(root, rel)
+	}
 	c := &converter{}
 	c.blocks(root)
 	out := strings.Join(c.out, "\n\n")
@@ -609,13 +630,14 @@ func writeEmphasis(b *strings.Builder, n *html.Node, delim string) {
 // carries meaning to the stylesheet (external, red, interwiki, file) stay
 // HTML.
 func markdownLink(n *html.Node) (string, bool) {
-	href, title := "", ""
+	href := ""
 	for _, a := range n.Attr {
 		switch a.Key {
 		case "href":
 			href = a.Val
 		case "title":
-			title = a.Val
+			// Left out: the site gives every wiki link its target's title
+			// again, and the Markdown reads more easily without it.
 		case "class":
 			if a.Val != "mw-redirect" {
 				return "", false
@@ -624,7 +646,7 @@ func markdownLink(n *html.Node) (string, bool) {
 			return "", false
 		}
 	}
-	if !(strings.HasPrefix(href, "/wiki/") || strings.HasPrefix(href, "#")) || strings.ContainsAny(href, " <>\n") {
+	if !(strings.HasPrefix(href, "/wiki/") || strings.HasPrefix(href, wikiOrigin+"/wiki/") || strings.HasPrefix(href, "#") || isCorpusLink(href)) || strings.ContainsAny(href, " <>\n") {
 		return "", false
 	}
 	text := strings.TrimSpace(inlineMarkdown(children(n)))
@@ -636,11 +658,7 @@ func markdownLink(n *html.Node) (string, bool) {
 		// keeps their parentheses from closing the link early.
 		href = "<" + href + ">"
 	}
-	link := "[" + text + "](" + href
-	if title != "" && title != html.UnescapeString(strings.ReplaceAll(text, `\`, "")) {
-		link += ` "` + strings.ReplaceAll(title, `"`, `\"`) + `"`
-	}
-	return link + ")", true
+	return "[" + text + "](" + href + ")", true
 }
 
 var markdownSpecial = strings.NewReplacer(
@@ -670,6 +688,13 @@ var blankLineRE = regexp.MustCompile(`\n[ \t]*\n`)
 // it must start at the margin and contain no blank line, which would end it.
 func rawHTMLBlock(s string) string {
 	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "<pre") && !strings.Contains(s, "<textarea") {
+		// Outside preformatted text a blank line is only whitespace.
+		for blankLineRE.MatchString(s) {
+			s = blankLineRE.ReplaceAllString(s, "\n")
+		}
+		return s
+	}
 	for blankLineRE.MatchString(s) {
 		s = blankLineRE.ReplaceAllString(s, "\n<!-- -->\n")
 	}

@@ -103,11 +103,17 @@ type site struct {
 	translated map[string]string // corpus page → its translation in lang, when there is one
 	pages      []*sitePage
 	byTitle    map[string]*sitePage
-	categories map[string][]categoryMember // category name, spaces → members
-	fileUsage  map[string][]*sitePage      // file name, underscores → pages showing it
-	images     *imageBundle
-	stats      siteStats
-	built      time.Time
+	root       string               // the English content directory the pages are read from
+	byRel      map[string]*sitePage // path below root, slashes → page
+	corpus     string
+	// templateStyles is set when the corpus carries the wiki's TemplateStyles
+	// for the shell to link.
+	templateStyles bool
+	categories     map[string][]categoryMember // category name, spaces → members
+	fileUsage      map[string][]*sitePage      // file name, underscores → pages showing it
+	images         *imageBundle
+	stats          siteStats
+	built          time.Time
 }
 
 type siteStats struct {
@@ -152,7 +158,7 @@ func runPublish(args []string) error {
 	// The English corpus is the site's structure: every language has the
 	// same pages at the same paths, and shows a page's translation where
 	// there is one.
-	s := &site{base: root, assets: root, out: *out, langs: langs, built: time.Now().UTC()}
+	s := &site{base: root, assets: root, out: *out, langs: langs, corpus: *corpus, built: time.Now().UTC()}
 	if err := s.load(languageContentRoot(*corpus, "en")); err != nil {
 		return err
 	}
@@ -257,7 +263,14 @@ func (s *site) load(root string) error {
 	if err, ok := failed.Load().(error); ok {
 		return err
 	}
+	s.root = root
 	s.byTitle = make(map[string]*sitePage, len(s.pages))
+	s.byRel = make(map[string]*sitePage, len(s.pages))
+	for _, p := range s.pages {
+		if rel, err := filepath.Rel(root, p.Source); err == nil {
+			s.byRel[filepath.ToSlash(rel)] = p
+		}
+	}
 	for _, p := range s.pages {
 		if prev, ok := s.byTitle[p.Meta.Title]; ok {
 			keep, drop := servedPage(prev, p)
@@ -554,6 +567,12 @@ func (s *site) writeSharedAssets() error {
 	if err != nil {
 		return err
 	}
+	if data, err := os.ReadFile(filepath.Join(s.corpus, filepath.FromSlash(templateStylesPath))); err == nil {
+		if err := s.writeFile("skin/templatestyles.css", data); err != nil {
+			return err
+		}
+		s.templateStyles = true
+	}
 	for _, name := range []string{"tgw.js", "tgw.css"} {
 		data, err := siteFS.ReadFile("site/" + name)
 		if err != nil {
@@ -722,4 +741,17 @@ func (s *site) languageBase(code string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// corpusRel is the page's path below the content directory, which its
+// translations share, or "" for a generated page.
+func (s *site) corpusRel(p *sitePage) string {
+	if p.Source == "" || s.root == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(s.root, p.Source)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
