@@ -592,7 +592,7 @@ func unescapeMarks(source, text string) string {
 			text = strings.ReplaceAll(text, tag, "")
 		}
 	}
-	for _, c := range "*_[]()<>#`!|~" {
+	for _, c := range "*_[](){}<>#`!|~.+-" {
 		esc := `\` + string(c)
 		if !strings.Contains(source, esc) {
 			text = strings.ReplaceAll(text, esc, string(c))

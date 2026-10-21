@@ -132,3 +132,11 @@ func TestUnescapeMarksDropsEscapeTags(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestUnescapeMarksInLinkTargets(t *testing.T) {
+	source := `the [Shadow](../S/Shadow.md) of [Barad-dûr](../B/Barad-dûr.md)`
+	got := unescapeMarks(source, `[Bóng tối]\(../S/Shadow\.md) của [Barad\-dûr](../B/Barad\-dûr\.md)`)
+	if want := `[Bóng tối](../S/Shadow.md) của [Barad-dûr](../B/Barad-dûr.md)`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
