@@ -860,17 +860,19 @@ func downloadImages(ctx context.Context, client *fetch.Client, base, root string
 
 func downloadImage(ctx context.Context, client *fetch.Client, base, root string, job imageJob) (int64, error) {
 	escaped := (&url.URL{Path: "/w/images/" + job.rel}).EscapedPath()
-	resp, err := client.Get(ctx, strings.TrimRight(base, "/")+escaped)
+	link := strings.TrimRight(base, "/") + escaped
+	data, polished, err := getImage(ctx, client, link)
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
+	if polished && job.size > 0 && int64(len(data)) != job.size {
+		// Cloudflare Polish recompresses the copies it has cached. A
+		// query string the cache has not seen goes to the wiki itself,
+		// which still serves the original bytes.
+		data, _, err = getImage(ctx, client, fmt.Sprintf("%s?tgw=%d", link, time.Now().UnixNano()))
+		if err != nil {
+			return 0, err
+		}
 	}
 	if job.size > 0 && int64(len(data)) != job.size {
 		return 0, fmt.Errorf("size %d, want %d", len(data), job.size)
@@ -882,4 +884,18 @@ func downloadImage(ctx context.Context, client *fetch.Client, base, root string,
 		}
 	}
 	return int64(len(data)), atomicWrite(filepath.Join(root, filepath.FromSlash(job.rel)), data)
+}
+
+// getImage fetches link and reports whether Cloudflare Polish changed it.
+func getImage(ctx context.Context, client *fetch.Client, link string) ([]byte, bool, error) {
+	resp, err := client.Get(ctx, link)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	return data, resp.Header.Get("Cf-Polished") != "", err
 }
