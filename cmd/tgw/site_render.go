@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ func (s *site) renderContent(p *sitePage, body []byte) (renderedPage, error) {
 		root.AppendChild(n)
 	}
 	var toc []tocEntry
-	s.rewriteTree(root, &toc)
+	s.rewriteTree(root, &toc, s.corpusRel(p))
 	numberTOC(toc)
 	wrapSections(root)
 
@@ -82,8 +83,9 @@ func (s *site) renderContent(p *sitePage, body []byte) (renderedPage, error) {
 }
 
 // rewriteTree points links and images at the mirror, restores MediaWiki's
-// heading markup and collects the table of contents.
-func (s *site) rewriteTree(n *html.Node, toc *[]tocEntry) {
+// heading markup and collects the table of contents. from is the page's
+// corpus path, which relative links start from.
+func (s *site) rewriteTree(n *html.Node, toc *[]tocEntry, from string) {
 	if n.Type == html.ElementNode {
 		switch n.DataAtom {
 		case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
@@ -91,12 +93,13 @@ func (s *site) rewriteTree(n *html.Node, toc *[]tocEntry) {
 				*toc = append(*toc, entry)
 			}
 		}
+		linkTitle := ""
 		for i := range n.Attr {
 			a := &n.Attr[i]
 			switch a.Key {
 			case "href":
 				if n.DataAtom == atom.A || n.DataAtom == atom.Area {
-					a.Val = s.rewriteHref(a.Val)
+					a.Val, linkTitle = s.rewriteHref(a.Val, from)
 				}
 			case "src", "poster", "data-src":
 				a.Val = s.imageURL(a.Val)
@@ -111,9 +114,13 @@ func (s *site) rewriteTree(n *html.Node, toc *[]tocEntry) {
 				}
 			}
 		}
+		// The wiki titles every link to a page; the corpus leaves that out.
+		if linkTitle != "" && attr(n, "title") == "" && !hasClass(n, "external") {
+			n.Attr = append(n.Attr, html.Attribute{Key: "title", Val: linkTitle})
+		}
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		s.rewriteTree(c, toc)
+		s.rewriteTree(c, toc, from)
 	}
 }
 
@@ -294,13 +301,23 @@ func wrapSections(root *html.Node) {
 }
 
 // rewriteHref points a link at the mirrored page when there is one, and
-// at the live wiki for everything the mirror does not carry.
-func (s *site) rewriteHref(href string) string {
+// at the live wiki for everything the mirror does not carry. It also
+// returns the title of the wiki page linked to, if any.
+func (s *site) rewriteHref(href, from string) (string, string) {
 	switch {
 	case href == "" || strings.HasPrefix(href, "#"):
-		return href
+		return href, ""
 	case strings.HasPrefix(href, "//"):
 		href = "https:" + href
+	case isCorpusLink(href):
+		name, fragment, _ := strings.Cut(href, "#")
+		rel, err := url.PathUnescape(name)
+		if err == nil {
+			if p := s.byRel[path.Join(path.Dir(from), rel)]; p != nil {
+				return s.titleURL(p.Meta.Title, fragment), p.Meta.Title
+			}
+		}
+		return href, ""
 	}
 	for _, prefix := range []string{wikiOrigin, "http://tolkiengateway.net", "https://www.tolkiengateway.net"} {
 		if rest, ok := strings.CutPrefix(href, prefix); ok && strings.HasPrefix(rest, "/") {
@@ -312,30 +329,31 @@ func (s *site) rewriteHref(href string) string {
 		return s.wikiHref(rest)
 	}
 	if strings.HasPrefix(href, "/") {
-		return wikiOrigin + href
+		return wikiOrigin + href, ""
 	}
-	return href
+	return href, ""
 }
 
-// wikiHref resolves the part of a /wiki/ URL after the prefix.
-func (s *site) wikiHref(rest string) string {
+// wikiHref resolves the part of a /wiki/ URL after the prefix, and gives
+// the title it names.
+func (s *site) wikiHref(rest string) (string, string) {
 	name, fragment, _ := strings.Cut(rest, "#")
 	if strings.Contains(name, "?") {
-		return wikiOrigin + "/wiki/" + rest
+		return wikiOrigin + "/wiki/" + rest, ""
 	}
 	title, err := url.PathUnescape(name)
 	if err != nil {
-		return wikiOrigin + "/wiki/" + rest
+		return wikiOrigin + "/wiki/" + rest, ""
 	}
 	title = normalizeTitle(title)
 	if title == "Special:Random" {
-		return s.base + "/wiki/Special:Random.html"
+		return s.base + "/wiki/Special:Random.html", title
 	}
 	ns, _ := splitTitle(title)
 	if _, ok := namespaceDirs[ns]; !ok {
-		return wikiOrigin + "/wiki/" + rest
+		return wikiOrigin + "/wiki/" + rest, title
 	}
-	return s.titleURL(title, fragment)
+	return s.titleURL(title, fragment), title
 }
 
 // normalizeTitle applies MediaWiki's title rules the links rely on:

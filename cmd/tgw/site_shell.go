@@ -56,6 +56,9 @@ func (s *site) document(p *sitePage, r renderedPage) string {
 	b.WriteString(`<script src="` + s.base + `/skin/chrome.js"></script>` + "\n")
 	b.WriteString(`<link rel="stylesheet" href="` + s.assets + `/skin/skin.css">` + "\n")
 	b.WriteString(`<link rel="stylesheet" href="` + s.assets + `/skin/tgw.css">` + "\n")
+	if s.templateStyles {
+		b.WriteString(`<link rel="stylesheet" href="` + s.assets + `/skin/templatestyles.css">` + "\n")
+	}
 	if m.NoTitle {
 		b.WriteString("<style>.firstHeading,.subtitle,#siteSub,#contentSub,.pagetitle{display:none}</style>\n")
 	}
