@@ -45,3 +45,22 @@ func TestConvertLinksPointAtCorpusFiles(t *testing.T) {
 		t.Errorf("styles not collected: %v", links.styles)
 	}
 }
+
+func TestPlainDisplayTitleIsLeftOut(t *testing.T) {
+	for _, c := range []struct {
+		display, title string
+		ns             int
+		plain          bool
+	}{
+		{`<span class="mw-page-title-main">Grey Havens</span>`, "Grey Havens", 0, true},
+		{`<span class="mw-page-title-namespace">File</span><span class="mw-page-title-separator">:</span><span class="mw-page-title-main">Tom&#039;s map.jpg</span>`, "File:Tom's map.jpg", 6, true},
+		{`<i>The Hobbit</i>`, "The Hobbit", 0, false},
+	} {
+		if got := plainDisplayTitle(c.display, c.title, c.ns); got != c.plain {
+			t.Errorf("plainDisplayTitle(%q) = %v", c.display, got)
+		}
+	}
+	if got := rawHTMLBlock("<div>\n\n\n<p>a</p>\n  \n</div>"); got != "<div>\n<p>a</p>\n</div>" {
+		t.Errorf("rawHTMLBlock kept blank lines: %q", got)
+	}
+}

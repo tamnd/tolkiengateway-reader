@@ -189,6 +189,13 @@ func renderRedirect(item inventoryItem, links *corpusLinks, rel string) string {
 	return b.String()
 }
 
+// plainDisplayTitle reports whether a display title is only what the site
+// shows for the title anyway, MediaWiki's default title spans.
+func plainDisplayTitle(display, title string, ns int) bool {
+	plain := html.UnescapeString(display)
+	return plain == title || plain == html.UnescapeString(pageHeading(pageMeta{Title: title, Namespace: ns}))
+}
+
 // pageFlags are the behaviour switches carried over from the page
 // properties, written as booleans named after their magic words.
 var pageFlags = []string{"notoc", "forcetoc", "notitle", "nogallery"}
@@ -198,7 +205,7 @@ func renderPageMarkdown(page crawledPage, props map[string]string, file *imageRe
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "title: %s\n", yamlQuote(page.Title))
-	if display := page.DisplayTitle; display != "" && display != html.EscapeString(page.Title) && display != page.Title {
+	if display := page.DisplayTitle; display != "" && !plainDisplayTitle(display, page.Title, page.Namespace) {
 		fmt.Fprintf(&b, "display_title: %s\n", yamlQuote(display))
 	}
 	fmt.Fprintf(&b, "page_id: %d\nnamespace: %d\nrevision_id: %d\n", page.PageID, page.Namespace, page.Revision)
@@ -681,6 +688,13 @@ var blankLineRE = regexp.MustCompile(`\n[ \t]*\n`)
 // it must start at the margin and contain no blank line, which would end it.
 func rawHTMLBlock(s string) string {
 	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "<pre") && !strings.Contains(s, "<textarea") {
+		// Outside preformatted text a blank line is only whitespace.
+		for blankLineRE.MatchString(s) {
+			s = blankLineRE.ReplaceAllString(s, "\n")
+		}
+		return s
+	}
 	for blankLineRE.MatchString(s) {
 		s = blankLineRE.ReplaceAllString(s, "\n<!-- -->\n")
 	}
