@@ -345,7 +345,7 @@ func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job 
 			continue
 		}
 		pool.Succeed(r.Name)
-		text := matchSpacing(source, unfence(response.Text))
+		text := matchSpacing(source, unlinkURLs(source, unfence(response.Text)))
 		if err := validateChunk(source, text); err != nil {
 			lastErr = err
 			continue
@@ -479,6 +479,71 @@ func unfence(text string) string {
 		}
 	}
 	return t
+}
+
+// unlinkURLs undoes the links ChatGPT makes of bare URLs. Its server
+// rewrites every URL in an answer as [url](url), Markdown-escaped, even
+// inside an HTML attribute, which turns href="http://…" into
+// href="[http://…](http://…)". A link whose text and target are the same
+// URL, and which the source did not have, goes back to the plain URL.
+func unlinkURLs(source, text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "[http") {
+			if url, n := urlLink(text[i:]); n > 0 && !strings.Contains(source, text[i:i+n]) {
+				b.WriteString(url)
+				i += n
+				continue
+			}
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	return b.String()
+}
+
+// urlLink reads a [url](url) link at the start of s and returns the URL
+// and the link's length, or 0 when s does not start with one.
+func urlLink(s string) (string, int) {
+	end := strings.Index(s, "](")
+	if end < 0 || strings.ContainsAny(s[:end], " \t\n") {
+		return "", 0
+	}
+	label := s[1:end]
+	depth := 0
+	for i := end + 2; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case ' ', '\n':
+			return "", 0
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+				continue
+			}
+			url := markdownUnescape(label)
+			if url != markdownUnescape(s[end+2:i]) {
+				return "", 0
+			}
+			return url, i + 1
+		}
+	}
+	return "", 0
+}
+
+// markdownUnescape drops the backslashes Markdown puts before punctuation.
+func markdownUnescape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\\`*_{}[]()#+-.!<>|~", s[i+1]) >= 0 {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // matchSpacing gives the translation the source's leading and trailing

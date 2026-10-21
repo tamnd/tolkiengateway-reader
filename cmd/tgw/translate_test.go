@@ -95,3 +95,13 @@ func TestMatchSpacingAndUnfence(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestUnlinkURLsUndoesChatGPTLinks(t *testing.T) {
+	source := `<a href="http://en.wikipedia.org/wiki/Ealing">Ealing</a> <a href="http://en.wikipedia.org/wiki/Realism_(visual_arts)">Realistic</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md)`
+	// As it came back from ChatGPT.
+	text := `<a href="[http://en.wikipedia.org/wiki/Ealing](http://en.wikipedia.org/wiki/Ealing)">Ealing</a> <a href="[http://en.wikipedia.org/wiki/Realism\_(visual_arts)](http://en.wikipedia.org/wiki/Realism_\(visual_arts\))">Hiện thực</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md) [http://b.example](http://c.example)`
+	want := `<a href="http://en.wikipedia.org/wiki/Ealing">Ealing</a> <a href="http://en.wikipedia.org/wiki/Realism_(visual_arts)">Hiện thực</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md) [http://b.example](http://c.example)`
+	if got := unlinkURLs(source, text); got != want {
+		t.Fatalf("unlinkURLs:\n got %s\nwant %s", got, want)
+	}
+}
