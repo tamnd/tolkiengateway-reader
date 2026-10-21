@@ -116,3 +116,11 @@ func TestUnescapeMarksKeepsEmphasis(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestUnescapeMarksKeepsLinksAndTags(t *testing.T) {
+	source := `In [S.A.](../S/Second_Age.md)<sup id="x"><a href="#n">[2]</a></sup>`
+	got := unescapeMarks(source, `Vào [N.A.]\(../S/Second_Age.md)\<sup id="x">\<a href="#n">[2]\</a>\</sup>`)
+	if want := `Vào [N.A.](../S/Second_Age.md)<sup id="x"><a href="#n">[2]</a></sup>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

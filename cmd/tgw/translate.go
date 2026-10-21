@@ -581,11 +581,12 @@ func markdownUnescape(s string) string {
 	return b.String()
 }
 
-// unescapeMarks drops the backslashes ChatGPT puts before emphasis and
-// link brackets, which turn *[olvar](…)* into literal asterisks around a
-// link. An escape the source itself uses is kept.
+// unescapeMarks drops the backslashes ChatGPT puts before Markdown and
+// HTML punctuation, which turn *[olvar](…)* into literal asterisks around a
+// link, [x]\(…) into text and \<sup> into a visible tag. An escape the
+// source itself uses is kept.
 func unescapeMarks(source, text string) string {
-	for _, c := range "*_[]" {
+	for _, c := range "*_[]()<>#`!|~" {
 		esc := `\` + string(c)
 		if !strings.Contains(source, esc) {
 			text = strings.ReplaceAll(text, esc, string(c))
