@@ -101,6 +101,8 @@ func runTranslate(args []string) error {
 	}
 	defer log.Close()
 
+	cache := filepath.Join(*root, ".tgw", "cache", "translate")
+
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
@@ -108,7 +110,7 @@ func runTranslate(args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := translateWorker(ctx, q, pool, log, instruction, *targetLang); err != nil {
+			if err := translateWorker(ctx, q, pool, log, cache, instruction, *targetLang); err != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -221,7 +223,7 @@ func enqueueDir(q *queue.Queue, root, base, dir, targetLang, promptSHA string) e
 	})
 }
 
-func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log *ledger.Log, instruction, targetLang string) error {
+func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log *ledger.Log, cache, instruction, targetLang string) error {
 	for {
 		job, err := q.Lease("translate", runtime.GOOS, "", time.Hour)
 		if errors.Is(err, queue.ErrEmpty) {
@@ -238,7 +240,7 @@ func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log 
 			}
 			continue
 		}
-		output, err := translateDocument(ctx, pool, log, job, instruction, string(input))
+		output, err := translateDocument(ctx, pool, log, cache, job, instruction, string(input))
 		if errors.Is(err, errNoRoute) {
 			_ = q.Release(job, err.Error())
 			return err
@@ -291,6 +293,28 @@ func frontMatter(text string) string {
 	return ""
 }
 
+// pickRoute waits out a cold spell instead of giving up: a single account
+// parked for a while should pause an unattended run, not end it.
+func pickRoute(ctx context.Context, pool *route.Pool) (route.Route, llm.Completer, func(), error) {
+	for {
+		r, client, release, err := pool.Pick(ctx)
+		if err == nil {
+			return r, client, release, nil
+		}
+		at, _ := pool.EarliestReset()
+		wait := time.Until(at)
+		if at.IsZero() || wait > 3*time.Hour {
+			return r, client, release, err
+		}
+		fmt.Fprintf(os.Stderr, "translate: %v; waiting\n", err)
+		select {
+		case <-ctx.Done():
+			return r, client, release, ctx.Err()
+		case <-time.After(max(wait, time.Second)):
+		}
+	}
+}
+
 // errNoRoute means no translation route can take work right now.
 var errNoRoute = errors.New("no translation route available")
 
@@ -307,7 +331,7 @@ type translationChunk struct {
 
 // translateDocument translates a page body chunk by chunk and puts it back
 // behind the unchanged front matter.
-func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, instruction, document string) (string, error) {
+func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, cache string, job queue.Job, instruction, document string) (string, error) {
 	document = strings.ReplaceAll(document, "\r\n", "\n")
 	head := frontMatter(document)
 	var out strings.Builder
@@ -317,8 +341,19 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, j
 			out.WriteString(chunk.text)
 			continue
 		}
+		// A page fails as a whole, so its finished chunks are kept on disk
+		// and the retry only asks again for the ones that did not pass.
+		sum := sha256.Sum256([]byte(instruction + "\x00" + chunk.text))
+		cached := filepath.Join(cache, hex.EncodeToString(sum[:])+".md")
+		if data, err := os.ReadFile(cached); err == nil {
+			out.Write(data)
+			continue
+		}
 		text, err := translateChunk(ctx, pool, log, job, i, instruction, chunk.text)
 		if err != nil {
+			return "", err
+		}
+		if err := atomicWrite(cached, []byte(text)); err != nil {
 			return "", err
 		}
 		out.WriteString(text)
@@ -329,7 +364,7 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, j
 func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, index int, instruction, source string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		r, client, release, err := pool.Pick(ctx)
+		r, client, release, err := pickRoute(ctx, pool)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errNoRoute, err)
 		}
