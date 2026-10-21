@@ -315,6 +315,10 @@ func pickRoute(ctx context.Context, pool *route.Pool) (route.Route, llm.Complete
 	}
 }
 
+// errInvalid means an answer came back but did not keep the source's
+// structure: its headings, links or tags.
+var errInvalid = errors.New("translation broke the markup")
+
 // errNoRoute means no translation route can take work right now.
 var errNoRoute = errors.New("no translation route available")
 
@@ -350,6 +354,15 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, c
 			continue
 		}
 		text, err := translateChunk(ctx, pool, log, job, i, instruction, chunk.text)
+		if errors.Is(err, errInvalid) {
+			// Three answers that each broke a link or a tag mean the model
+			// will not keep this passage intact. Rather than lose the whole
+			// page to it, the passage stays in English and is not cached, so
+			// it is asked for again whenever the page is next translated.
+			fmt.Fprintf(os.Stderr, "translate: %s: %v; kept in English\n", job.Target, err)
+			out.WriteString(chunk.text)
+			continue
+		}
 		if err != nil {
 			return "", err
 		}
@@ -382,7 +395,7 @@ func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job 
 		pool.Succeed(r.Name)
 		text := matchSpacing(source, unescapeMarks(source, unlinkURLs(source, unfence(response.Text))))
 		if err := validateChunk(source, text); err != nil {
-			lastErr = err
+			lastErr = fmt.Errorf("%w: %v", errInvalid, err)
 			continue
 		}
 		return text, nil
@@ -569,11 +582,15 @@ func urlLink(s string) (string, int) {
 	return "", 0
 }
 
+// asciiPunct is the punctuation Markdown lets a backslash escape, less the
+// backslash itself.
+const asciiPunct = "!\"#$%&'()*+,-./:;<=>?@[]^_`{|}~"
+
 // markdownUnescape drops the backslashes Markdown puts before punctuation.
 func markdownUnescape(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\\`*_{}[]()#+-.!<>|~", s[i+1]) >= 0 {
+		if s[i] == '\\' && i+1 < len(s) && strings.IndexByte(asciiPunct+"\\", s[i+1]) >= 0 {
 			i++
 		}
 		b.WriteByte(s[i])
@@ -592,7 +609,10 @@ func unescapeMarks(source, text string) string {
 			text = strings.ReplaceAll(text, tag, "")
 		}
 	}
-	for _, c := range "*_[](){}<>#`!|~.+-" {
+	// Markdown lets a backslash escape any ASCII punctuation, and ChatGPT
+	// uses that freely, even inside link targets and URLs. The backslash
+	// itself is left alone, since \\ is how a literal one is written.
+	for _, c := range asciiPunct {
 		esc := `\` + string(c)
 		if !strings.Contains(source, esc) {
 			text = strings.ReplaceAll(text, esc, string(c))

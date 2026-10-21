@@ -140,3 +140,12 @@ func TestUnescapeMarksInLinkTargets(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestUnlinkURLsWithEscapedAmpersands(t *testing.T) {
+	source := `by <a class="new" href="https://x.example/w/index.php?title=C&amp;action=edit">C</a>`
+	text := `của <a class="new" href="[https://x.example/w/index.php?title=C\&amp;action=edit](https://x.example/w/index.php?title=C\&amp;action=edit)">C</a>`
+	got := unescapeMarks(source, unlinkURLs(source, text))
+	if want := `của <a class="new" href="https://x.example/w/index.php?title=C&amp;action=edit">C</a>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
