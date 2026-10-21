@@ -124,3 +124,11 @@ func TestUnescapeMarksKeepsLinksAndTags(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestUnescapeMarksDropsEscapeTags(t *testing.T) {
+	source := `- <a href="https://x.example/">Map</a> by A`
+	got := unescapeMarks(source, `- <escape><a href="https://x.example/">Bản đồ</a></escape> của A`)
+	if want := `- <a href="https://x.example/">Bản đồ</a> của A`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

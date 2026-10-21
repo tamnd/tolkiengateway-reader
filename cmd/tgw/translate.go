@@ -586,6 +586,12 @@ func markdownUnescape(s string) string {
 // link, [x]\(…) into text and \<sup> into a visible tag. An escape the
 // source itself uses is kept.
 func unescapeMarks(source, text string) string {
+	// ChatGPT also wraps a URL it should not link in <escape> tags.
+	for _, tag := range []string{"<escape>", "</escape>"} {
+		if !strings.Contains(source, tag) {
+			text = strings.ReplaceAll(text, tag, "")
+		}
+	}
 	for _, c := range "*_[]()<>#`!|~" {
 		esc := `\` + string(c)
 		if !strings.Contains(source, esc) {
