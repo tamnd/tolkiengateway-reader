@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -93,5 +96,74 @@ func TestMatchSpacingAndUnfence(t *testing.T) {
 	got := matchSpacing("\nHello\n\n", unfence("```markdown\nXin chào\n```"))
 	if got != "\nXin chào\n\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestUnlinkURLsUndoesChatGPTLinks(t *testing.T) {
+	source := `<a href="http://en.wikipedia.org/wiki/Ealing">Ealing</a> <a href="http://en.wikipedia.org/wiki/Realism_(visual_arts)">Realistic</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md)`
+	// As it came back from ChatGPT.
+	text := `<a href="[http://en.wikipedia.org/wiki/Ealing](http://en.wikipedia.org/wiki/Ealing)">Ealing</a> <a href="[http://en.wikipedia.org/wiki/Realism\_(visual_arts)](http://en.wikipedia.org/wiki/Realism_\(visual_arts\))">Hiện thực</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md) [http://b.example](http://c.example)`
+	want := `<a href="http://en.wikipedia.org/wiki/Ealing">Ealing</a> <a href="http://en.wikipedia.org/wiki/Realism_(visual_arts)">Hiện thực</a> [http://a.example/x](http://a.example/x) [Men](../N/Men.md) [http://b.example](http://c.example)`
+	if got := unlinkURLs(source, text); got != want {
+		t.Fatalf("unlinkURLs:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestUnescapeMarksKeepsEmphasis(t *testing.T) {
+	source := "The *[olvar](../O/Olvar.md)*"
+	got := unescapeMarks(source, "Các \\*[olvar](../O/Olvar.md)\\*")
+	if want := "Các *[olvar](../O/Olvar.md)*"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := unescapeMarks("a \\_b", "x \\_y \\*z"); got != "x \\_y *z" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestUnescapeMarksKeepsLinksAndTags(t *testing.T) {
+	source := `In [S.A.](../S/Second_Age.md)<sup id="x"><a href="#n">[2]</a></sup>`
+	got := unescapeMarks(source, `Vào [N.A.]\(../S/Second_Age.md)\<sup id="x">\<a href="#n">[2]\</a>\</sup>`)
+	if want := `Vào [N.A.](../S/Second_Age.md)<sup id="x"><a href="#n">[2]</a></sup>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnescapeMarksDropsEscapeTags(t *testing.T) {
+	source := `- <a href="https://x.example/">Map</a> by A`
+	got := unescapeMarks(source, `- <escape><a href="https://x.example/">Bản đồ</a></escape> của A`)
+	if want := `- <a href="https://x.example/">Bản đồ</a> của A`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnescapeMarksInLinkTargets(t *testing.T) {
+	source := `the [Shadow](../S/Shadow.md) of [Barad-dûr](../B/Barad-dûr.md)`
+	got := unescapeMarks(source, `[Bóng tối]\(../S/Shadow\.md) của [Barad\-dûr](../B/Barad\-dûr\.md)`)
+	if want := `[Bóng tối](../S/Shadow.md) của [Barad-dûr](../B/Barad-dûr.md)`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnlinkURLsWithEscapedAmpersands(t *testing.T) {
+	source := `by <a class="new" href="https://x.example/w/index.php?title=C&amp;action=edit">C</a>`
+	text := `của <a class="new" href="[https://x.example/w/index.php?title=C\&amp;action=edit](https://x.example/w/index.php?title=C\&amp;action=edit)">C</a>`
+	got := unescapeMarks(source, unlinkURLs(source, text))
+	if want := `của <a class="new" href="https://x.example/w/index.php?title=C&amp;action=edit">C</a>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTranslateTargetsFromFile(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "pages.txt")
+	if err := os.WriteFile(name, []byte("main/A/Aman.md\n\nmain/T/The_Monsters_and_the_Critics,_and_Other_Essays.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := translateTargets("@" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"main/A/Aman.md", "main/T/The_Monsters_and_the_Critics,_and_Other_Essays.md"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

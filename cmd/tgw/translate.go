@@ -39,7 +39,7 @@ func runTranslate(args []string) error {
 	routeFile := fs.String("routes", "", "llm route registry; defaults to Tolkien Gateway config")
 	workers := fs.Int("workers", 0, "parallel translation workers; defaults to fleet capacity")
 	noTunnels := fs.Bool("no-tunnels", false, "do not start SSH tunnels; use already-running local endpoints")
-	dirs := fs.String("dirs", "main", "comma-separated namespace directories under content/<source-lang> to translate")
+	dirs := fs.String("dirs", "main", "comma-separated namespace directories or pages under content/<source-lang> to translate, or @file for one per line")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,7 +70,11 @@ func runTranslate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA, strings.Split(*dirs, ",")); err != nil {
+	targets, err := translateTargets(*dirs)
+	if err != nil {
+		return err
+	}
+	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA, targets); err != nil {
 		return err
 	}
 	if *workers <= 0 {
@@ -101,6 +105,8 @@ func runTranslate(args []string) error {
 	}
 	defer log.Close()
 
+	cache := filepath.Join(*root, ".tgw", "cache", "translate")
+
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
@@ -108,7 +114,7 @@ func runTranslate(args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := translateWorker(ctx, q, pool, log, instruction, *targetLang); err != nil {
+			if err := translateWorker(ctx, q, pool, log, cache, instruction, *targetLang); err != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -221,7 +227,7 @@ func enqueueDir(q *queue.Queue, root, base, dir, targetLang, promptSHA string) e
 	})
 }
 
-func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log *ledger.Log, instruction, targetLang string) error {
+func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log *ledger.Log, cache, instruction, targetLang string) error {
 	for {
 		job, err := q.Lease("translate", runtime.GOOS, "", time.Hour)
 		if errors.Is(err, queue.ErrEmpty) {
@@ -238,7 +244,7 @@ func translateWorker(ctx context.Context, q *queue.Queue, pool *route.Pool, log 
 			}
 			continue
 		}
-		output, err := translateDocument(ctx, pool, log, job, instruction, string(input))
+		output, err := translateDocument(ctx, pool, log, cache, job, instruction, string(input))
 		if errors.Is(err, errNoRoute) {
 			_ = q.Release(job, err.Error())
 			return err
@@ -291,6 +297,32 @@ func frontMatter(text string) string {
 	return ""
 }
 
+// pickRoute waits out a cold spell instead of giving up: a single account
+// parked for a while should pause an unattended run, not end it.
+func pickRoute(ctx context.Context, pool *route.Pool) (route.Route, llm.Completer, func(), error) {
+	for {
+		r, client, release, err := pool.Pick(ctx)
+		if err == nil {
+			return r, client, release, nil
+		}
+		at, _ := pool.EarliestReset()
+		wait := time.Until(at)
+		if at.IsZero() || wait > 3*time.Hour {
+			return r, client, release, err
+		}
+		fmt.Fprintf(os.Stderr, "translate: %v; waiting\n", err)
+		select {
+		case <-ctx.Done():
+			return r, client, release, ctx.Err()
+		case <-time.After(max(wait, time.Second)):
+		}
+	}
+}
+
+// errInvalid means an answer came back but did not keep the source's
+// structure: its headings, links or tags.
+var errInvalid = errors.New("translation broke the markup")
+
 // errNoRoute means no translation route can take work right now.
 var errNoRoute = errors.New("no translation route available")
 
@@ -307,7 +339,7 @@ type translationChunk struct {
 
 // translateDocument translates a page body chunk by chunk and puts it back
 // behind the unchanged front matter.
-func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, instruction, document string) (string, error) {
+func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, cache string, job queue.Job, instruction, document string) (string, error) {
 	document = strings.ReplaceAll(document, "\r\n", "\n")
 	head := frontMatter(document)
 	var out strings.Builder
@@ -317,8 +349,28 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, j
 			out.WriteString(chunk.text)
 			continue
 		}
+		// A page fails as a whole, so its finished chunks are kept on disk
+		// and the retry only asks again for the ones that did not pass.
+		sum := sha256.Sum256([]byte(instruction + "\x00" + chunk.text))
+		cached := filepath.Join(cache, hex.EncodeToString(sum[:])+".md")
+		if data, err := os.ReadFile(cached); err == nil {
+			out.Write(data)
+			continue
+		}
 		text, err := translateChunk(ctx, pool, log, job, i, instruction, chunk.text)
+		if errors.Is(err, errInvalid) {
+			// Three answers that each broke a link or a tag mean the model
+			// will not keep this passage intact. Rather than lose the whole
+			// page to it, the passage stays in English and is not cached, so
+			// it is asked for again whenever the page is next translated.
+			fmt.Fprintf(os.Stderr, "translate: %s: %v; kept in English\n", job.Target, err)
+			out.WriteString(chunk.text)
+			continue
+		}
 		if err != nil {
+			return "", err
+		}
+		if err := atomicWrite(cached, []byte(text)); err != nil {
 			return "", err
 		}
 		out.WriteString(text)
@@ -329,7 +381,7 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, j
 func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, index int, instruction, source string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		r, client, release, err := pool.Pick(ctx)
+		r, client, release, err := pickRoute(ctx, pool)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errNoRoute, err)
 		}
@@ -345,9 +397,9 @@ func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job 
 			continue
 		}
 		pool.Succeed(r.Name)
-		text := matchSpacing(source, unfence(response.Text))
+		text := matchSpacing(source, unescapeMarks(source, unlinkURLs(source, unfence(response.Text))))
 		if err := validateChunk(source, text); err != nil {
-			lastErr = err
+			lastErr = fmt.Errorf("%w: %v", errInvalid, err)
 			continue
 		}
 		return text, nil
@@ -481,10 +533,122 @@ func unfence(text string) string {
 	return t
 }
 
+// unlinkURLs undoes the links ChatGPT makes of bare URLs. Its server
+// rewrites every URL in an answer as [url](url), Markdown-escaped, even
+// inside an HTML attribute, which turns href="http://…" into
+// href="[http://…](http://…)". A link whose text and target are the same
+// URL, and which the source did not have, goes back to the plain URL.
+func unlinkURLs(source, text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "[http") {
+			if url, n := urlLink(text[i:]); n > 0 && !strings.Contains(source, text[i:i+n]) {
+				b.WriteString(url)
+				i += n
+				continue
+			}
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	return b.String()
+}
+
+// urlLink reads a [url](url) link at the start of s and returns the URL
+// and the link's length, or 0 when s does not start with one.
+func urlLink(s string) (string, int) {
+	end := strings.Index(s, "](")
+	if end < 0 || strings.ContainsAny(s[:end], " \t\n") {
+		return "", 0
+	}
+	label := s[1:end]
+	depth := 0
+	for i := end + 2; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case ' ', '\n':
+			return "", 0
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+				continue
+			}
+			url := markdownUnescape(label)
+			if url != markdownUnescape(s[end+2:i]) {
+				return "", 0
+			}
+			return url, i + 1
+		}
+	}
+	return "", 0
+}
+
+// asciiPunct is the punctuation Markdown lets a backslash escape, less the
+// backslash itself.
+const asciiPunct = "!\"#$%&'()*+,-./:;<=>?@[]^_`{|}~"
+
+// markdownUnescape drops the backslashes Markdown puts before punctuation.
+func markdownUnescape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && strings.IndexByte(asciiPunct+"\\", s[i+1]) >= 0 {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// unescapeMarks drops the backslashes ChatGPT puts before Markdown and
+// HTML punctuation, which turn *[olvar](…)* into literal asterisks around a
+// link, [x]\(…) into text and \<sup> into a visible tag. An escape the
+// source itself uses is kept.
+func unescapeMarks(source, text string) string {
+	// ChatGPT also wraps a URL it should not link in <escape> tags.
+	for _, tag := range []string{"<escape>", "</escape>"} {
+		if !strings.Contains(source, tag) {
+			text = strings.ReplaceAll(text, tag, "")
+		}
+	}
+	// Markdown lets a backslash escape any ASCII punctuation, and ChatGPT
+	// uses that freely, even inside link targets and URLs. The backslash
+	// itself is left alone, since \\ is how a literal one is written.
+	for _, c := range asciiPunct {
+		esc := `\` + string(c)
+		if !strings.Contains(source, esc) {
+			text = strings.ReplaceAll(text, esc, string(c))
+		}
+	}
+	return text
+}
+
 // matchSpacing gives the translation the source's leading and trailing
 // whitespace, so chunks join back with the same blank lines.
 func matchSpacing(source, text string) string {
 	lead := source[:len(source)-len(strings.TrimLeft(source, " \t\n"))]
 	trail := source[len(strings.TrimRight(source, " \t\n")):]
 	return lead + strings.TrimSpace(text) + trail
+}
+
+// translateTargets reads -dirs. Page names can hold commas, so a list of
+// pages is better given as @file, one per line.
+func translateTargets(dirs string) ([]string, error) {
+	name, ok := strings.CutPrefix(dirs, "@")
+	if !ok {
+		return strings.Split(dirs, ","), nil
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	var targets []string
+	for line := range strings.Lines(string(data)) {
+		if line = strings.TrimSpace(line); line != "" {
+			targets = append(targets, line)
+		}
+	}
+	return targets, nil
 }
