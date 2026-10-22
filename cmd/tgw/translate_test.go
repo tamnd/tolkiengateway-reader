@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -146,6 +149,21 @@ func TestUnlinkURLsWithEscapedAmpersands(t *testing.T) {
 	text := `của <a class="new" href="[https://x.example/w/index.php?title=C\&amp;action=edit](https://x.example/w/index.php?title=C\&amp;action=edit)">C</a>`
 	got := unescapeMarks(source, unlinkURLs(source, text))
 	if want := `của <a class="new" href="https://x.example/w/index.php?title=C&amp;action=edit">C</a>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTranslateTargetsFromFile(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "pages.txt")
+	if err := os.WriteFile(name, []byte("main/A/Aman.md\n\nmain/T/The_Monsters_and_the_Critics,_and_Other_Essays.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := translateTargets("@" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"main/A/Aman.md", "main/T/The_Monsters_and_the_Critics,_and_Other_Essays.md"}
+	if !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

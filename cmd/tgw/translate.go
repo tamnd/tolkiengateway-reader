@@ -39,7 +39,7 @@ func runTranslate(args []string) error {
 	routeFile := fs.String("routes", "", "llm route registry; defaults to Tolkien Gateway config")
 	workers := fs.Int("workers", 0, "parallel translation workers; defaults to fleet capacity")
 	noTunnels := fs.Bool("no-tunnels", false, "do not start SSH tunnels; use already-running local endpoints")
-	dirs := fs.String("dirs", "main", "comma-separated namespace directories under content/<source-lang> to translate")
+	dirs := fs.String("dirs", "main", "comma-separated namespace directories or pages under content/<source-lang> to translate, or @file for one per line")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,7 +70,11 @@ func runTranslate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA, strings.Split(*dirs, ",")); err != nil {
+	targets, err := translateTargets(*dirs)
+	if err != nil {
+		return err
+	}
+	if err := enqueueTranslations(q, *root, *sourceLang, *targetLang, template.SHA, targets); err != nil {
 		return err
 	}
 	if *workers <= 0 {
@@ -627,4 +631,24 @@ func matchSpacing(source, text string) string {
 	lead := source[:len(source)-len(strings.TrimLeft(source, " \t\n"))]
 	trail := source[len(strings.TrimRight(source, " \t\n")):]
 	return lead + strings.TrimSpace(text) + trail
+}
+
+// translateTargets reads -dirs. Page names can hold commas, so a list of
+// pages is better given as @file, one per line.
+func translateTargets(dirs string) ([]string, error) {
+	name, ok := strings.CutPrefix(dirs, "@")
+	if !ok {
+		return strings.Split(dirs, ","), nil
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	var targets []string
+	for line := range strings.Lines(string(data)) {
+		if line = strings.TrimSpace(line); line != "" {
+			targets = append(targets, line)
+		}
+	}
+	return targets, nil
 }
