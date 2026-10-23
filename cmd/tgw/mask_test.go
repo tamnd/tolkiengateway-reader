@@ -13,6 +13,7 @@ var maskCases = []string{
 	`* [Easterling](<../E/Easterlings_(First_Age).md>) lord of [Dor-lómin](../D/Dor-lómin.md "Dor-lómin")`,
 	`| Name | Meaning |` + "\n" + `|---|---|` + "\n" + `| [Celeb](../C/Celeb.md) | silver |`,
 	`> *A long quotation in italics that runs well past six words and is translated.*`,
+	`Words in *x* and *a b c d e f g h* italics.`,
 	`See http://en.wikipedia.org/wiki/Roland and ` + "`code`" + `, a ![map](map.png) and 2*3*4.`,
 }
 

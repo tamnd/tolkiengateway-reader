@@ -95,10 +95,11 @@ func maskMarkdown(md string, gloss *glossary) masked {
 	}
 	pair := func(kind string) func(string) string {
 		return func(s string) string {
-			inner := s[2 : len(s)-2]
+			n := 2
 			if kind == "i" {
-				inner = s[1 : len(s)-1]
+				n = 1
 			}
+			inner := s[n : len(s)-n]
 			tag := id(kind, &maskPart{})
 			return "<" + tag + ">" + inner + "</" + tag + ">"
 		}

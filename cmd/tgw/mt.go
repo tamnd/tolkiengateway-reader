@@ -124,7 +124,8 @@ func runMT(args []string) error {
 	for _, p := range pages {
 		d, err := newMTDoc(p.page, p.source, p.output, gloss)
 		if err != nil {
-			return err
+			fmt.Fprintln(os.Stderr, "mt: skipped", err)
+			continue
 		}
 		group = append(group, d)
 		chars += d.chars()
@@ -192,12 +193,18 @@ type mtDoc struct {
 	units                []*mtUnit
 }
 
-func newMTDoc(page, source, output string, gloss *glossary) (*mtDoc, error) {
+func newMTDoc(page, source, output string, gloss *glossary) (d *mtDoc, err error) {
+	// A page the masker trips on is skipped, not the whole run.
+	defer func() {
+		if r := recover(); r != nil {
+			d, err = nil, fmt.Errorf("%s: %v", page, r)
+		}
+	}()
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return nil, err
 	}
-	d := &mtDoc{page: page, output: output, source: strings.ReplaceAll(string(data), "\r\n", "\n")}
+	d = &mtDoc{page: page, output: output, source: strings.ReplaceAll(string(data), "\r\n", "\n")}
 	head := frontMatter(d.source)
 	d.add(head, nil)
 	for _, chunk := range splitTranslation(d.source[len(head):]) {
