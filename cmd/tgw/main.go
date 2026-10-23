@@ -29,6 +29,8 @@ func main() {
 		err = runExtract(os.Args[2:])
 	case "translate":
 		err = runTranslate(os.Args[2:])
+	case "mt":
+		err = runMT(os.Args[2:])
 	case "crawl":
 		err = runCrawl(os.Args[2:])
 	case "convert":
@@ -49,5 +51,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tgw <version|crawl|convert|skin|acquire|extract|translate|sync|publish|audit> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: tgw <version|crawl|convert|skin|acquire|extract|translate|mt|sync|publish|audit> [flags]")
 }
