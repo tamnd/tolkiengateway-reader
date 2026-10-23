@@ -18,7 +18,7 @@ var maskCases = []string{
 
 func TestMaskRoundTrips(t *testing.T) {
 	for _, md := range maskCases {
-		m := maskMarkdown(md)
+		m := maskMarkdown(md, nil)
 		got, err := m.unmask(m.text)
 		if err != nil || got != md {
 			t.Errorf("round trip of %q\nmasked %q\ngot    %q (%v)", md, m.text, got, err)
@@ -27,26 +27,26 @@ func TestMaskRoundTrips(t *testing.T) {
 }
 
 func TestMaskHidesTitlesAndNames(t *testing.T) {
-	m := maskMarkdown(maskCases[3])
+	m := maskMarkdown(maskCases[3], nil)
 	if strings.Contains(m.text, "Lord of the Rings") || strings.Contains(m.text, ".md") {
 		t.Fatalf("title or target left for the engine: %q", m.text)
 	}
-	m = maskMarkdown(`for *[The Lord of the Rings: The Fellowship of the Ring](../T/The_Lord_of_the_Rings%253A_The_Fellowship_of_the_Ring.md)*`)
+	m = maskMarkdown(`for *[The Lord of the Rings: The Fellowship of the Ring](../T/The_Lord_of_the_Rings%253A_The_Fellowship_of_the_Ring.md)*`, nil)
 	if strings.Contains(m.text, "Fellowship") {
 		t.Fatalf("long linked title left for the engine: %q", m.text)
 	}
-	m = maskMarkdown(`However, J.R.R. Tolkien himself, in T.A. 3018, met C. S. Lewis.`)
+	m = maskMarkdown(`However, J.R.R. Tolkien himself, in T.A. 3018, met C. S. Lewis.`, nil)
 	if strings.Contains(m.text, "Tolkien") || strings.Contains(m.text, "T.A.") || strings.Contains(m.text, "Lewis") {
 		t.Fatalf("initials left for the engine: %q", m.text)
 	}
-	m = maskMarkdown(maskCases[6])
+	m = maskMarkdown(maskCases[6], nil)
 	if !strings.Contains(m.text, "long quotation") {
 		t.Fatalf("long italic span hidden: %q", m.text)
 	}
 }
 
 func TestUnmaskRepairsSpacing(t *testing.T) {
-	m := maskMarkdown(maskCases[0])
+	m := maskMarkdown(maskCases[0], nil)
 	// What Google does: spaces inside pairs and before a citation.
 	answer := strings.ReplaceAll(m.text, "<b1>", "<b1> ")
 	answer = strings.ReplaceAll(answer, ",<x3/>", ", <x3/>")
@@ -60,16 +60,19 @@ func TestUnmaskRepairsSpacing(t *testing.T) {
 }
 
 func TestUnmaskKeepsSpaceBetweenTags(t *testing.T) {
-	md := `In [T.A.](../T/Third_Age.md) [3018](../T/Third_Age_3018.md), the [Shire](../S/Shire.md) [fell](../F/Fell.md).`
-	m := maskMarkdown(md)
-	answer := strings.NewReplacer("/> <", "/><", "</a3> <a4>", "</a3><a4>").Replace(m.text)
+	md := `In [T.A.](../T/Third_Age.md) [3018](../T/Third_Age_3018.md), the [Shire](../S/Shire.md) [fell](../F/Fell.md) [hard](../H/Hard.md) and J.R.R. Tolkien wrote, in C. S. Lewis's words.`
+	m := maskMarkdown(md, nil)
+	answer := strings.NewReplacer("/> <", "/><", "</a3> <a4>", "</a3><a4>", "</a5> ", "</a5>").Replace(m.text)
+	answer = strings.Replace(answer, "/> wrote", "/>wrote", 1)
+	md = strings.Replace(md, "Lewis's words", "Lewis words", 1)
+	answer = strings.Replace(answer, "/>'s words", "/>words", 1)
 	if got, err := m.unmask(answer); err != nil || got != md {
-		t.Fatalf("got %q, %v from %q", got, err, answer)
+		t.Fatalf("got %q, %v from %q\nmasked %q", got, err, answer, m.text)
 	}
 }
 
 func TestUnmaskReportsTagProblems(t *testing.T) {
-	m := maskMarkdown(`made a lord in [Dor-lómin](../D/Dor-lómin.md) by [Morgoth](../M/Morgoth.md)`)
+	m := maskMarkdown(`made a lord in [Dor-lómin](../D/Dor-lómin.md) by [Morgoth](../M/Morgoth.md)`, nil)
 	answer := strings.ReplaceAll(m.text, "a2", "a1")
 	if _, err := m.unmask(answer); err == nil || !strings.Contains(err.Error(), "repeated a1") || !strings.Contains(err.Error(), "lost a2") {
 		t.Fatalf("err = %v", err)
@@ -77,7 +80,7 @@ func TestUnmaskReportsTagProblems(t *testing.T) {
 }
 
 func TestCheckNumbers(t *testing.T) {
-	src := maskMarkdown(`joined by Stoors around 1630, with 2,000 men in T.A. 3018.<sup id="cite_ref-12">[12]</sup>`).text
+	src := maskMarkdown(`joined by Stoors around 1630, with 2,000 men in T.A. 3018.<sup id="cite_ref-12">[12]</sup>`, nil).text
 	for answer, ok := range map[string]bool{
 		"cùng người Stoors vào khoảng năm 1630, với 2.000 người vào T.A. 3018.<x1/>": true,
 		"cùng người Stoors vào khoảng 16:30, với 2.000 người vào T.A. 3018.<x1/>":    false,
@@ -108,7 +111,7 @@ func TestMTDocAssembles(t *testing.T) {
 	if err := atomicWrite(path, []byte(d.source)); err != nil {
 		t.Fatal(err)
 	}
-	d, err := newMTDoc("p", path, "")
+	d, err := newMTDoc("p", path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,5 +127,18 @@ func TestMTDocAssembles(t *testing.T) {
 	}
 	if text, failed := d.assemble(); text != d.source || failed != 0 {
 		t.Fatalf("assemble = %q, %d failed", text, failed)
+	}
+}
+
+func TestMaskUsesGlossary(t *testing.T) {
+	g := newGlossary(map[string]string{"Men": "Con Người", "Mount Doom": "Núi Diệt Vong", "Doom": "Diệt Vong"})
+	m := maskMarkdown(`The [Men](../M/Men.md) of the West reached Mount Doom, but Menelvagor and Doomsday stayed.`, g)
+	if strings.Contains(m.text, "Men]") || strings.Contains(m.text, "Mount") || !strings.Contains(m.text, "Menelvagor") || !strings.Contains(m.text, "Doomsday") {
+		t.Fatalf("masked %q", m.text)
+	}
+	got, err := m.unmask(m.text)
+	want := `The [Con Người](../M/Men.md) of the West reached Núi Diệt Vong, but Menelvagor and Doomsday stayed.`
+	if err != nil || got != want {
+		t.Fatalf("got %q, %v", got, err)
 	}
 }

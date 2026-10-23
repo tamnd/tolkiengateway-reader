@@ -35,6 +35,7 @@ func runMT(args []string) error {
 	limit := fs.Int("limit", 0, "stop after this many pages; 0 for all")
 	evalIn := fs.String("eval", "", "translate the chunks of an mteval sample.jsonl instead of pages")
 	evalOut := fs.String("eval-out", "", "where -eval writes its results")
+	useGlossary := fs.Bool("glossary", true, "give Google the terms ChatGPT's translations settled on")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -45,8 +46,23 @@ func runMT(args []string) error {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
 	ctx := context.Background()
+	logPath := filepath.Join(*root, ".tgw", "mt.jsonl")
+	var gloss *glossary
+	if *useGlossary {
+		skip, err := mtLogged(logPath)
+		if err != nil {
+			return err
+		}
+		if gloss, err = buildGlossary(*root, *sourceLang, *targetLang, skip); err != nil {
+			return err
+		}
+		if err := gloss.save(filepath.Join(*root, ".tgw", "glossary.tsv")); err != nil {
+			return err
+		}
+		fmt.Printf("mt: glossary of %d terms\n", len(gloss.terms))
+	}
 	if *evalIn != "" {
-		return mtEval(ctx, g, *evalIn, *evalOut, *batch)
+		return mtEval(ctx, g, gloss, *evalIn, *evalOut, *batch)
 	}
 
 	targets, err := translateTargets(*dirs)
@@ -61,7 +77,7 @@ func runMT(args []string) error {
 		pages = pages[:*limit]
 	}
 	fmt.Printf("mt: %d pages to translate\n", len(pages))
-	logFile, err := os.OpenFile(filepath.Join(*root, ".tgw", "mt.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -106,7 +122,7 @@ func runMT(args []string) error {
 		return nil
 	}
 	for _, p := range pages {
-		d, err := newMTDoc(p.page, p.source, p.output)
+		d, err := newMTDoc(p.page, p.source, p.output, gloss)
 		if err != nil {
 			return err
 		}
@@ -176,7 +192,7 @@ type mtDoc struct {
 	units                []*mtUnit
 }
 
-func newMTDoc(page, source, output string) (*mtDoc, error) {
+func newMTDoc(page, source, output string, gloss *glossary) (*mtDoc, error) {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return nil, err
@@ -195,7 +211,7 @@ func newMTDoc(page, source, output string) (*mtDoc, error) {
 				d.add(block, nil)
 				continue
 			}
-			u := &mtUnit{source: body, m: maskMarkdown(body)}
+			u := &mtUnit{source: body, m: maskMarkdown(body, gloss)}
 			d.units = append(d.units, u)
 			d.add("", u)
 			d.add(block[len(body):], nil)
@@ -238,7 +254,7 @@ func (d *mtDoc) assemble() (string, int) {
 }
 
 func hasLetters(s string) bool {
-	text := maskMarkdown(s).text
+	text := maskMarkdown(s, nil).text
 	text = maskTag.ReplaceAllString(text, "")
 	return strings.IndexFunc(text, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }) >= 0
 }
@@ -273,8 +289,29 @@ type googleMT struct {
 var errRefused = errors.New("google refused the request")
 
 // translateUnits sends the units in requests of about batch characters, one
-// paragraph per q, and checks every answer.
+// paragraph per q, and checks every answer. The more a paragraph is masked
+// the likelier Google drops a tag, so a paragraph that fails is sent once
+// more with only its markup masked, the glossary terms left in English.
 func (g *googleMT) translateUnits(ctx context.Context, units []*mtUnit, batch int) error {
+	if err := g.sendUnits(ctx, units, batch); err != nil {
+		return err
+	}
+	var again []*mtUnit
+	for _, u := range units {
+		if u.text == "" {
+			if m := maskMarkdown(u.source, nil); m.text != u.m.text {
+				u.m = m
+				again = append(again, u)
+			}
+		}
+	}
+	if len(again) == 0 {
+		return nil
+	}
+	return g.sendUnits(ctx, again, batch)
+}
+
+func (g *googleMT) sendUnits(ctx context.Context, units []*mtUnit, batch int) error {
 	for start := 0; start < len(units); {
 		end, size := start, 0
 		for end < len(units) && (end == start || size+len(units[end].m.text) <= batch) {
@@ -387,7 +424,7 @@ func parseGoogle(body []byte, want int) ([]string, error) {
 
 // mtEval runs the chunks of an mteval sample through the same pipeline as a
 // page, for tools/mteval to score against the other engines.
-func mtEval(ctx context.Context, g *googleMT, in, out string, batch int) error {
+func mtEval(ctx context.Context, g *googleMT, gloss *glossary, in, out string, batch int) error {
 	f, err := os.Open(in)
 	if err != nil {
 		return err
@@ -411,7 +448,7 @@ func mtEval(ctx context.Context, g *googleMT, in, out string, batch int) error {
 		if err := os.WriteFile(tmp, []byte(r.Source), 0o644); err != nil {
 			return err
 		}
-		d, err := newMTDoc(r.ID, tmp, "")
+		d, err := newMTDoc(r.ID, tmp, "", gloss)
 		if err != nil {
 			return err
 		}

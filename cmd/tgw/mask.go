@@ -55,6 +55,9 @@ type maskPart struct {
 	// Whether the source had a space before an opaque tag or an opening one.
 	// Engines drop it between two tags, joining [T.A.](…) [3018](…).
 	spaceBefore bool
+	// Whether the source had a space after an opaque tag or a closing one.
+	// Engines drop it before a word: "Tolkien có" came back "Tolkiencó".
+	spaceAfter bool
 }
 
 type masked struct {
@@ -62,7 +65,9 @@ type masked struct {
 	parts map[string]*maskPart
 }
 
-func maskMarkdown(md string) masked {
+// maskMarkdown masks a paragraph. Glossary terms are hidden with their
+// translation, so the engine sees them already settled.
+func maskMarkdown(md string, gloss *glossary) masked {
 	m := masked{parts: map[string]*maskPart{}}
 	n := 0
 	id := func(kind string, p *maskPart) string {
@@ -79,6 +84,11 @@ func maskMarkdown(md string) masked {
 		if !hasLower(g[1]) {
 			// Nothing to translate in [3018](…) or [T.A.](…).
 			return opaque(s)
+		}
+		if gloss != nil {
+			if vi, ok := gloss.terms[g[1]]; ok {
+				return opaque("[" + vi + "](" + g[2] + g[3] + ")")
+			}
 		}
 		tag := id("a", &maskPart{payload: g[2], extra: g[3]})
 		return "<" + tag + ">" + g[1] + "</" + tag + ">"
@@ -116,6 +126,7 @@ func maskMarkdown(md string) masked {
 			return opaque(s)
 		})
 		body = maskInitials.ReplaceAllStringFunc(body, opaque)
+		body = gloss.replace(body, func(_, vi string) string { return opaque(vi) })
 		if strings.HasPrefix(strings.TrimSpace(body), "|") {
 			body = maskPipes(body, opaque)
 		}
@@ -210,8 +221,17 @@ func (m masked) markGlue() {
 	for _, loc := range maskTag.FindAllStringSubmatchIndex(m.text, -1) {
 		tag := m.text[loc[4]:loc[5]]
 		p := m.parts[tag]
-		if p == nil || loc[3] > loc[2] {
+		if p == nil {
 			continue
+		}
+		after := loc[1] < len(m.text) && m.text[loc[1]] == ' '
+		if loc[3] > loc[2] {
+			p.spaceAfter = after
+			continue
+		}
+		if tag[0] == 'x' {
+			// Tolkien's comes back as "của Tolkien có", the 's gone.
+			p.spaceAfter = !startsWord(m.text[loc[1]:]) && endsWord(p.payload)
 		}
 		p.spaceBefore = loc[0] > 0 && m.text[loc[0]-1] == ' '
 		if tag[0] != 'x' {
@@ -220,6 +240,19 @@ func (m masked) markGlue() {
 		p.gluedBefore = loc[0] > 0 && !isSpace(m.text[loc[0]-1])
 		p.gluedAfter = loc[1] < len(m.text) && !isSpace(m.text[loc[1]])
 	}
+}
+
+// startsWord reports whether s begins with a letter or digit.
+func startsWord(s string) bool {
+	for _, r := range s {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	}
+	return false
+}
+
+func endsWord(s string) bool {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
@@ -236,7 +269,7 @@ func (m masked) unmask(text string) (string, error) {
 	var problems []string
 	seen := map[string]bool{}
 	last := 0
-	skipSpace := false
+	skipSpace, needSpace := false, false
 	// Only the engine's own spaces are trimmed, never the end of what the
 	// tags put back, such as the space in a list marker.
 	restored := 0
@@ -245,14 +278,18 @@ func (m masked) unmask(text string) (string, error) {
 		if skipSpace {
 			between = strings.TrimLeft(between, " \t")
 		}
+		if needSpace && startsWord(between) {
+			out = append(out, ' ')
+		}
 		out = append(out, between...)
-		last, skipSpace = loc[1], false
+		last, skipSpace, needSpace = loc[1], false, false
 		closing, tag := text[loc[2]:loc[3]] == "/", text[loc[4]:loc[5]]
 		p := m.parts[tag]
 		if p == nil {
 			problems = append(problems, "invented "+tag)
 			continue
 		}
+		needSpace = p.spaceAfter && (closing || tag[0] == 'x')
 		if !closing {
 			if seen[tag] {
 				problems = append(problems, "repeated "+tag)
@@ -285,6 +322,9 @@ func (m masked) unmask(text string) (string, error) {
 	tail := text[last:]
 	if skipSpace {
 		tail = strings.TrimLeft(tail, " \t")
+	}
+	if needSpace && startsWord(tail) {
+		out = append(out, ' ')
 	}
 	out = append(out, tail...)
 	for tag := range m.parts {
