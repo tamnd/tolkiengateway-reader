@@ -72,6 +72,17 @@ func TestUnmaskKeepsSpaceBetweenTags(t *testing.T) {
 	}
 }
 
+func TestUnmaskSeparatesMovedWords(t *testing.T) {
+	m := maskMarkdown(`invaded by any of the [Free Peoples](../F/Free_Peoples.md). The [Dwarf](../D/Dwarves.md)s and **Elves** came.`, nil)
+	// Vietnamese puts "nào" after the link, and a word before the bold.
+	answer := strings.NewReplacer("</a1>.", "</a1>nào.", "<b3>", "và<b3>").Replace(m.text)
+	got, err := m.unmask(answer)
+	want := `invaded by any of the [Free Peoples](../F/Free_Peoples.md) nào. The [Dwarf](../D/Dwarves.md)s and và **Elves** came.`
+	if err != nil || got != want {
+		t.Fatalf("got %q, %v from %q", got, err, answer)
+	}
+}
+
 func TestUnmaskReportsTagProblems(t *testing.T) {
 	m := maskMarkdown(`made a lord in [Dor-lómin](../D/Dor-lómin.md) by [Morgoth](../M/Morgoth.md)`, nil)
 	answer := strings.ReplaceAll(m.text, "a2", "a1")
@@ -112,7 +123,7 @@ func TestMTDocAssembles(t *testing.T) {
 	if err := atomicWrite(path, []byte(d.source)); err != nil {
 		t.Fatal(err)
 	}
-	d, err := newMTDoc("p", path, "", nil)
+	d, err := newMTDoc("p", path, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,5 +152,35 @@ func TestMaskUsesGlossary(t *testing.T) {
 	want := `The [Con Người](../M/Men.md) of the West reached Núi Diệt Vong, but Menelvagor and Doomsday stayed.`
 	if err != nil || got != want {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestFillDocTranslatesOnlyEnglish(t *testing.T) {
+	dir := t.TempDir()
+	en := "---\ntitle: x\n---\nThe Elves came to Middle-earth.\n\nThey left in the Third Age.\n"
+	vi := "---\ntitle: x\n---\nTiên tộc đã đến Trung Địa.\n\nThey left in the Third Age.\n"
+	if err := atomicWrite(dir+"/en.md", []byte(en)); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dir+"/vi.md", []byte(vi)); err != nil {
+		t.Fatal(err)
+	}
+	d, err := fillDoc(mtPage{"p", dir + "/en.md", dir + "/vi.md"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.units) != 1 || d.units[0].source != "They left in the Third Age." {
+		t.Fatalf("units = %d", len(d.units))
+	}
+	d.units[0].text = "Họ rời đi vào Kỷ Đệ Tam."
+	if text, _ := d.assemble(); text != strings.Replace(vi, "They left in the Third Age.", "Họ rời đi vào Kỷ Đệ Tam.", 1) {
+		t.Fatalf("assembled %q", text)
+	}
+}
+
+func TestParseReview(t *testing.T) {
+	got, err := parseReview("```json\n[{\"id\": 1, \"errors\": [{\"cat\": \"terminology\", \"sev\": \"major\", \"en\": \"Second Age\", \"bad\": \"Thứ hai\", \"good\": \"Kỷ Đệ Nhị\"}], \"fix\": \"x\"}]\n```")
+	if err != nil || len(got) != 1 || got[0].Errors[0].Good != "Kỷ Đệ Nhị" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

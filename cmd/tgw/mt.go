@@ -36,6 +36,7 @@ func runMT(args []string) error {
 	evalIn := fs.String("eval", "", "translate the chunks of an mteval sample.jsonl instead of pages")
 	evalOut := fs.String("eval-out", "", "where -eval writes its results")
 	useGlossary := fs.Bool("glossary", true, "give Google the terms ChatGPT's translations settled on")
+	fill := fs.Bool("fill", false, "in pages ChatGPT translated, translate only the paragraphs it left in English")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -69,9 +70,22 @@ func runMT(args []string) error {
 	if err != nil {
 		return err
 	}
-	pages, err := mtPages(*root, *sourceLang, *targetLang, targets, *overwrite)
+	pages, err := mtPages(*root, *sourceLang, *targetLang, targets, *overwrite || *fill)
 	if err != nil {
 		return err
+	}
+	if *fill {
+		google, err := mtLogged(logPath)
+		if err != nil {
+			return err
+		}
+		kept := pages[:0]
+		for _, p := range pages {
+			if _, err := os.Stat(p.output); err == nil && !google[p.page] {
+				kept = append(kept, p)
+			}
+		}
+		pages = kept
 	}
 	if *limit > 0 && len(pages) > *limit {
 		pages = pages[:*limit]
@@ -97,7 +111,7 @@ func runMT(args []string) error {
 			return err
 		}
 		for _, d := range group {
-			if !*overwrite {
+			if !*overwrite && !*fill {
 				// ChatGPT may have finished the page while this batch ran.
 				if _, err := os.Stat(d.output); err == nil {
 					continue
@@ -111,7 +125,11 @@ func runMT(args []string) error {
 			if err := atomicWrite(d.output, []byte(text)); err != nil {
 				return err
 			}
-			line, _ := json.Marshal(map[string]any{"page": d.page, "engine": "google", "paragraphs": len(d.units), "english": failed, "at": time.Now().UTC().Format(time.RFC3339)})
+			engine := "google"
+			if *fill {
+				engine = "google-fill"
+			}
+			line, _ := json.Marshal(map[string]any{"page": d.page, "engine": engine, "paragraphs": len(d.units), "english": failed, "at": time.Now().UTC().Format(time.RFC3339)})
 			fmt.Fprintln(logFile, string(line))
 			done++
 			kept += failed
@@ -122,9 +140,17 @@ func runMT(args []string) error {
 		return nil
 	}
 	for _, p := range pages {
-		d, err := newMTDoc(p.page, p.source, p.output, gloss)
+		var d *mtDoc
+		if *fill {
+			d, err = fillDoc(p, gloss)
+		} else {
+			d, err = newMTDoc(p.page, p.source, p.output, gloss, nil)
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "mt: skipped", err)
+			continue
+		}
+		if *fill && len(d.units) == 0 {
 			continue
 		}
 		group = append(group, d)
@@ -193,7 +219,23 @@ type mtDoc struct {
 	units                []*mtUnit
 }
 
-func newMTDoc(page, source, output string, gloss *glossary) (d *mtDoc, err error) {
+// fillDoc reads a page ChatGPT translated and makes units of only the
+// paragraphs still identical to the English source.
+func fillDoc(p mtPage, gloss *glossary) (*mtDoc, error) {
+	en, err := os.ReadFile(p.source)
+	if err != nil {
+		return nil, err
+	}
+	english := map[string]bool{}
+	for _, para := range pageParagraphs(string(en)) {
+		english[para] = true
+	}
+	return newMTDoc(p.page, p.output, p.output, gloss, english)
+}
+
+// newMTDoc cuts a page into paragraphs to translate. With only set, just
+// the paragraphs in it are, and the rest is kept as it is.
+func newMTDoc(page, source, output string, gloss *glossary, only map[string]bool) (d *mtDoc, err error) {
 	// A page the masker trips on is skipped, not the whole run.
 	defer func() {
 		if r := recover(); r != nil {
@@ -214,7 +256,7 @@ func newMTDoc(page, source, output string, gloss *glossary) (d *mtDoc, err error
 		}
 		for _, block := range splitBlocks(chunk.text) {
 			body := strings.TrimRight(block, " \t\n")
-			if !hasLetters(body) {
+			if !hasLetters(body) || only != nil && !only[strings.TrimSpace(body)] {
 				d.add(block, nil)
 				continue
 			}
@@ -455,7 +497,7 @@ func mtEval(ctx context.Context, g *googleMT, gloss *glossary, in, out string, b
 		if err := os.WriteFile(tmp, []byte(r.Source), 0o644); err != nil {
 			return err
 		}
-		d, err := newMTDoc(r.ID, tmp, "", gloss)
+		d, err := newMTDoc(r.ID, tmp, "", gloss, nil)
 		if err != nil {
 			return err
 		}

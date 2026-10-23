@@ -202,7 +202,7 @@ func (g *glossary) save(path string) error {
 	return atomicWrite(path, []byte(b.String()))
 }
 
-// mtLogged lists the pages tgw mt wrote, which must not teach the glossary.
+// mtLogged lists the pages tgw mt translated whole, which must not teach the glossary.
 func mtLogged(path string) (map[string]bool, error) {
 	pages := map[string]bool{}
 	f, err := os.Open(path)
@@ -215,8 +215,9 @@ func mtLogged(path string) (map[string]bool, error) {
 	defer f.Close()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		var r struct{ Page string }
-		if json.Unmarshal(s.Bytes(), &r) == nil && r.Page != "" {
+		var r struct{ Page, Engine string }
+		// Pages Google only filled in are still ChatGPT's.
+		if json.Unmarshal(s.Bytes(), &r) == nil && r.Page != "" && r.Engine != "google-fill" {
 			pages[r.Page] = true
 		}
 	}

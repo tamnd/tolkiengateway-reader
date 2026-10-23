@@ -55,9 +55,11 @@ type maskPart struct {
 	// Whether the source had a space before an opaque tag or an opening one.
 	// Engines drop it between two tags, joining [T.A.](…) [3018](…).
 	spaceBefore bool
-	// Whether the source had a space after an opaque tag or a closing one.
-	// Engines drop it before a word: "Tolkien có" came back "Tolkiencó".
-	spaceAfter bool
+	// Whether the source had no word right after an opaque tag or a closing
+	// one, or right before an opening one. Vietnamese moves words around
+	// the tags, and engines leave them glued: "Tolkien có" came back
+	// "Tolkiencó", "các [Dân tộc Tự do]() nào" came back "Tự do]()nào".
+	spaceAfter, apartBefore bool
 }
 
 type masked struct {
@@ -225,11 +227,11 @@ func (m masked) markGlue() {
 		if p == nil {
 			continue
 		}
-		after := loc[1] < len(m.text) && m.text[loc[1]] == ' '
 		if loc[3] > loc[2] {
-			p.spaceAfter = after
+			p.spaceAfter = !startsWord(m.text[loc[1]:])
 			continue
 		}
+		p.apartBefore = !endsWord(m.text[:loc[0]])
 		if tag[0] == 'x' {
 			// Tolkien's comes back as "của Tolkien có", the 's gone.
 			p.spaceAfter = !startsWord(m.text[loc[1]:]) && endsWord(p.payload)
@@ -290,13 +292,14 @@ func (m masked) unmask(text string) (string, error) {
 			problems = append(problems, "invented "+tag)
 			continue
 		}
-		needSpace = p.spaceAfter && (closing || tag[0] == 'x')
+		needSpace = p.spaceAfter && (tag[0] == 'x' || closing && endsWord(string(out)))
 		if !closing {
 			if seen[tag] {
 				problems = append(problems, "repeated "+tag)
 			}
 			seen[tag] = true
-			if p.spaceBefore && len(out) > 0 && !isSpace(out[len(out)-1]) {
+			if p.spaceBefore && len(out) > 0 && !isSpace(out[len(out)-1]) ||
+				p.apartBefore && !p.gluedBefore && endsWord(string(out)) {
 				out = append(out, ' ')
 			}
 		}
