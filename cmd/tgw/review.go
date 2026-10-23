@@ -346,7 +346,14 @@ func reviewBatch(ctx context.Context, pool *route.Pool, log *ledger.Log, instruc
 		}
 		for _, a := range answers {
 			if a.ID >= 1 && a.ID <= len(items) {
-				a := a
+				// A small judge lists words it would keep as they are.
+				kept := a.Errors[:0]
+				for _, e := range a.Errors {
+					if !strings.EqualFold(strings.TrimSpace(e.Bad), strings.TrimSpace(e.Good)) {
+						kept = append(kept, e)
+					}
+				}
+				a.Errors = kept
 				items[a.ID-1].Verdict = &a
 			}
 		}
