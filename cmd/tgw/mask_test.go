@@ -184,3 +184,13 @@ func TestParseReview(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+func TestUnmaskSpacesAfterGlossaryLink(t *testing.T) {
+	g := newGlossary(map[string]string{"Elves": "Tiên tộc"})
+	m := maskMarkdown(`and was succeeded by the [Elves](../E/Elves.md). Then *[Elves](../E/Elves.md)* left.`, g)
+	answer := strings.Replace(m.text, "<x2/>.", "<x2/>kế vị.", 1)
+	got, err := m.unmask(answer)
+	if err != nil || !strings.Contains(got, "(../E/Elves.md) kế vị.") {
+		t.Fatalf("got %q, %v from %q", got, err, answer)
+	}
+}

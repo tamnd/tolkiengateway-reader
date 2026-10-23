@@ -234,7 +234,7 @@ func (m masked) markGlue() {
 		p.apartBefore = !endsWord(m.text[:loc[0]])
 		if tag[0] == 'x' {
 			// Tolkien's comes back as "của Tolkien có", the 's gone.
-			p.spaceAfter = !startsWord(m.text[loc[1]:]) && endsWord(p.payload)
+			p.spaceAfter = !startsWord(m.text[loc[1]:]) && endsWord(visible(p.payload))
 		}
 		p.spaceBefore = loc[0] > 0 && m.text[loc[0]-1] == ' '
 		if tag[0] != 'x' {
@@ -256,6 +256,22 @@ func startsWord(s string) bool {
 func endsWord(s string) bool {
 	r, _ := utf8.DecodeLastRuneInString(s)
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+var (
+	trailingTarget = regexp.MustCompile(`\]\([^)]*\)$|</[a-z]+>$|[*_]$`)
+)
+
+// visible strips the Markdown a span ends with, so a hidden link such as
+// [Thranduil](../T/Thranduil.md) ends with what a reader sees: Thranduil.
+func visible(s string) string {
+	for {
+		loc := trailingTarget.FindStringIndex(s)
+		if loc == nil {
+			return s
+		}
+		s = s[:loc[0]]
+	}
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
