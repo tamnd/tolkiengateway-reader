@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,8 @@ var defaultRules string
 type rule struct {
 	kind, from, to, note string
 	re                   *regexp.Regexp
+	// need is text every match holds, to pass over text without it fast.
+	need string
 }
 
 type ruleSet struct{ rules []*rule }
@@ -63,8 +66,10 @@ func parseRules(text string) (*ruleSet, error) {
 		case "term":
 			r.re, err = regexp.Compile(`(^|[^\p{L}\p{N}])` + regexp.QuoteMeta(r.from) + `($|[^\p{L}\p{N}])`)
 			r.to = "${1}" + r.to + "${2}"
+			r.need = r.from
 		case "re":
 			r.re, err = regexp.Compile(r.from)
+			r.need = mustHave(r.from)
 		default:
 			err = fmt.Errorf("unknown kind %q", r.kind)
 		}
@@ -74,6 +79,30 @@ func parseRules(text string) (*ruleSet, error) {
 		rs.rules = append(rs.rules, r)
 	}
 	return rs, nil
+}
+
+// mustHave is the longest piece of literal text in a pattern that every
+// match holds, or "" when there is none.
+func mustHave(pattern string) string {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	re = re.Simplify()
+	var parts []*syntax.Regexp
+	switch re.Op {
+	case syntax.OpConcat:
+		parts = re.Sub
+	default:
+		parts = []*syntax.Regexp{re}
+	}
+	best := ""
+	for _, p := range parts {
+		if p.Op == syntax.OpLiteral && p.Flags&syntax.FoldCase == 0 && len(string(p.Rune)) > len(best) {
+			best = string(p.Rune)
+		}
+	}
+	return best
 }
 
 // builtinRules are the rules tgw ships with.
@@ -98,6 +127,9 @@ func (rs *ruleSet) apply(text string, hits map[string]int) string {
 	last := 0
 	free := func(s string) string {
 		for _, r := range rs.rules {
+			if r.need != "" && !strings.Contains(s, r.need) {
+				continue
+			}
 			// Twice, for matches that share the character between them.
 			for range 2 {
 				if !r.re.MatchString(s) {
