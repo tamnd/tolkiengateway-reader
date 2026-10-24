@@ -265,6 +265,14 @@ func fillDoc(p mtPage, gloss *glossary) (*mtDoc, error) {
 	if err != nil {
 		return nil, err
 	}
+	if vi, err := os.ReadFile(p.output); err == nil {
+		if fixed, n := repairSpans(string(en), string(vi), gloss); n > 0 {
+			if err := atomicWrite(p.output, []byte(fixed)); err != nil {
+				return nil, err
+			}
+			fmt.Printf("mt: %s: put back %d runs that are not English\n", p.page, n)
+		}
+	}
 	english := map[string]bool{}
 	for _, para := range pageParagraphs(string(en)) {
 		english[para] = true

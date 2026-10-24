@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"html"
 	"regexp"
@@ -174,6 +175,21 @@ var htmlStop = map[string]bool{
 
 var htmlWord = regexp.MustCompile(`[\p{L}][\p{L}'’-]*`)
 
+// englishWords are the lowercase words of the English prose, those used
+// at least three times and mostly outside italics and quotes, where the
+// wiki writes its Elvish: house, plural, married, but not mellon or zadan.
+//
+//go:embed rules/en-words.txt
+var englishWordList string
+
+var englishWords = func() map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(englishWordList) {
+		m[w] = true
+	}
+	return m
+}()
+
 // htmlTranslatable reports whether a run reads as a phrase to translate
 // rather than names or a citation.
 func htmlTranslatable(span string) bool {
@@ -184,13 +200,80 @@ func htmlTranslatable(span string) bool {
 	if isCitation(strings.TrimLeft(text, "↑^ 0123456789.")) {
 		return false
 	}
+	// A word in English, not a name, nor Elvish, nor a table of sounds.
 	for _, w := range htmlWord.FindAllString(text, -1) {
-		if len(w) > 1 && hasLower(w[:1]) && !htmlStop[w] {
+		if hasLower(w[:1]) && !htmlStop[w] && englishWords[strings.Trim(w, "'’-")] {
 			return true
 		}
 	}
 	return false
 }
+
+// repairSpans puts the English back in the runs of a page's HTML that an
+// earlier fill translated though they were not English, those the table of
+// phrases and the glossary do not give: a row of sounds, a word in Adûnaic.
+// It returns the page and how many runs it put back.
+func repairSpans(en, vi string, gloss *glossary) (string, int) {
+	blocks := func(text string) (out []translationChunk) {
+		return splitTranslation(text[len(frontMatter(text)):])
+	}
+	ec, vc := blocks(en), blocks(vi)
+	var eb []string
+	for _, c := range ec {
+		if c.verbatim {
+			eb = append(eb, c.text)
+		}
+	}
+	nv := 0
+	for _, c := range vc {
+		if c.verbatim {
+			nv++
+		}
+	}
+	if len(eb) != nv {
+		return vi, 0
+	}
+	var b strings.Builder
+	b.WriteString(frontMatter(vi))
+	n, k := 0, 0
+	for _, c := range vc {
+		if !c.verbatim {
+			b.WriteString(c.text)
+			continue
+		}
+		e, v := eb[k], c.text
+		k++
+		es, vs := htmlSpans(e), htmlSpans(v)
+		if len(es) != len(vs) {
+			b.WriteString(v)
+			continue
+		}
+		last := 0
+		for j := range es {
+			es, vs := e[es[j].start:es[j].end], v[vs[j].start:vs[j].end]
+			if es == vs || htmlTranslatable(es) {
+				continue
+			}
+			if _, ok := htmlPhrases.phraseFor(es); ok {
+				continue
+			}
+			if gloss != nil {
+				if _, ok := phraseTable(gloss.terms).phraseFor(es); ok {
+					continue
+				}
+			}
+			b.WriteString(v[last:vsStart(v, vs, last)])
+			b.WriteString(es)
+			last = vsStart(v, vs, last) + len(vs)
+			n++
+		}
+		b.WriteString(v[last:])
+	}
+	return b.String(), n
+}
+
+// vsStart finds a run in a block from where the last one ended.
+func vsStart(block, span string, from int) int { return from + strings.Index(block[from:], span) }
 
 // htmlPair are the tags whose text is translated with them kept around it.
 var htmlPair = map[string]bool{"a": true, "b": true, "strong": true, "em": true, "span": true, "small": true, "abbr": true, "q": true, "cite": true, "u": true, "s": true, "bdi": true}

@@ -70,3 +70,16 @@ func TestRulesWorkTitles(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestHTMLTranslatableNotElvish(t *testing.T) {
+	for _, s := range []string{"mh m", "th s z", "zadan", "bâr", "nê nud"} {
+		if htmlTranslatable(s) {
+			t.Errorf("%q taken for English", s)
+		}
+	}
+	for _, s := range []string{"Frodo is voiced by Ian Holm.", "(1978 film)", "zadan (neuter) 'house'"} {
+		if !htmlTranslatable(s) {
+			t.Errorf("%q not taken for English", s)
+		}
+	}
+}
