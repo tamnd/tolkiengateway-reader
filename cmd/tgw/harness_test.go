@@ -8,9 +8,9 @@ import (
 func TestRulesApply(t *testing.T) {
 	cases := map[string]string{
 		"Vào Kỷ nguyên thứ Ba, Chiếc Nhẫn Duy Nhất ở the Shire.": "Vào Kỷ Đệ Tam, Nhẫn Chúa ở Shire.",
-		"Bộ phim (phim 1978) hay .":                               "Bộ phim (phim năm 1978) hay.",
-		"[Núi Doom](../M/Mount_Doom.md)":                          "[Núi Diệt Vong](../M/Mount_Doom.md)",
-		"Kỷ Đệ Tam":                                               "Kỷ Đệ Tam",
+		"Bộ phim (phim 1978) hay .":                              "Bộ phim (phim năm 1978) hay.",
+		"[Núi Doom](../M/Mount_Doom.md)":                         "[Núi Diệt Vong](../M/Mount_Doom.md)",
+		"Kỷ Đệ Tam":                                              "Kỷ Đệ Tam",
 	}
 	for in, want := range cases {
 		if got := applyRules(in); got != want {
@@ -81,5 +81,28 @@ func TestHTMLTranslatableNotElvish(t *testing.T) {
 		if !htmlTranslatable(s) {
 			t.Errorf("%q not taken for English", s)
 		}
+	}
+}
+
+func TestDictSentences(t *testing.T) {
+	got := splitSentences("In The Letters of J. R. R. Tolkien, Donald A. Wollheim wrote. Then he left")
+	want := []string{"In The Letters of J. R. R. Tolkien, Donald A. Wollheim wrote", "Then he left"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+	lower := map[string]int{"king": 9, "ring": 9}
+	english := func(w string) bool { return lower[w] >= 5 }
+	for term, names := range map[string]bool{"Sauron": true, "Bag End": true, "King of Gondor": false, "Ring-bearer": false} {
+		if namesOnly(term, english) != names {
+			t.Errorf("namesOnly(%q) = %v", term, !names)
+		}
+	}
+}
+
+func TestGlossaryReplaceLongest(t *testing.T) {
+	g := newGlossary(map[string]string{"Mount": "Núi", "Mount Doom": "Núi Diệt Vong", "Doom": "Diệt Vong"})
+	got := g.replace("From Mount Doom to Mountains, Mount.", func(_, vi string) string { return "<" + vi + ">" })
+	if want := "From <Núi Diệt Vong> to Mountains, <Núi>."; got != want {
+		t.Fatalf("got %q", got)
 	}
 }

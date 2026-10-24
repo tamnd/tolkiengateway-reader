@@ -429,6 +429,18 @@ func loadGlossary(path string) (*glossary, error) {
 			terms[en] = vi
 		}
 	}
+	// The dictionary beside the glossary was settled on purpose, and wins.
+	dict, err := loadDict(filepath.Join(filepath.Dir(path), "dict.tsv"))
+	if err != nil {
+		return nil, err
+	}
+	for en, vi := range dict {
+		if vi == dictNotTerm {
+			delete(terms, en)
+		} else {
+			terms[en] = vi
+		}
+	}
 	return withFixes(newGlossary(terms)), nil
 }
 
@@ -466,6 +478,13 @@ func glossaryFor(g *glossary, texts ...string) string {
 			if vi, ok := g.terms[text]; ok {
 				used[text] = vi
 			}
+		}
+	}
+	// A name kept as it is needs no line, unless it holds an English word
+	// the model might translate (Shire, Bag End).
+	for k, vi := range used {
+		if vi == k && onlyNames(k) {
+			delete(used, k)
 		}
 	}
 	if len(used) == 0 {

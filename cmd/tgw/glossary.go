@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // glossary maps Tolkien terms to the Vietnamese the ChatGPT translations
@@ -18,7 +18,8 @@ import (
 // which keeps Google from translating them.
 type glossary struct {
 	terms map[string]string
-	re    *regexp.Regexp
+	// byFirst lists the terms by their first word, longest first.
+	byFirst map[string][]string
 }
 
 // buildGlossary reads every page ChatGPT translated and pairs the text of
@@ -177,43 +178,64 @@ func withFixes(g *glossary) *glossary {
 }
 
 func newGlossary(terms map[string]string) *glossary {
-	g := &glossary{terms: terms}
-	if len(terms) == 0 {
-		return g
-	}
-	keys := make([]string, 0, len(terms))
+	g := &glossary{terms: terms, byFirst: map[string][]string{}}
 	for k := range terms {
-		keys = append(keys, k)
-	}
-	// Longest first, so Mount Doom wins over Doom.
-	sort.Slice(keys, func(i, j int) bool {
-		if len(keys[i]) != len(keys[j]) {
-			return len(keys[i]) > len(keys[j])
+		if w := firstWord(k); w != "" {
+			g.byFirst[w] = append(g.byFirst[w], k)
 		}
-		return keys[i] < keys[j]
-	})
-	for i, k := range keys {
-		keys[i] = regexp.QuoteMeta(k)
 	}
-	g.re = regexp.MustCompile(strings.Join(keys, "|"))
+	// Longest first, so Mount Doom wins over Mount.
+	for _, keys := range g.byFirst {
+		sort.Slice(keys, func(i, j int) bool {
+			if len(keys[i]) != len(keys[j]) {
+				return len(keys[i]) > len(keys[j])
+			}
+			return keys[i] < keys[j]
+		})
+	}
 	return g
 }
 
-// replace calls fn on every whole-word glossary term in s.
+// firstWord is the run of letters and digits a term starts with.
+func firstWord(s string) string {
+	end := 0
+	for end < len(s) && isWordByte(s, end) {
+		_, n := utf8.DecodeRuneInString(s[end:])
+		end += n
+	}
+	return s[:end]
+}
+
+// replace calls fn on every whole-word glossary term in s, the longest at
+// each place.
 func (g *glossary) replace(s string, fn func(term, vi string) string) string {
-	if g == nil || g.re == nil {
+	if g == nil || len(g.byFirst) == 0 {
 		return s
 	}
 	var b strings.Builder
 	last := 0
-	for _, loc := range g.re.FindAllStringIndex(s, -1) {
-		if loc[0] > 0 && isWordByte(s, loc[0]-1) || loc[1] < len(s) && isWordByte(s, loc[1]) {
+	for i := 0; i < len(s); {
+		if !isWordByte(s, i) || i > 0 && isWordByte(s, i-1) {
+			_, n := utf8.DecodeRuneInString(s[i:])
+			i += n
 			continue
 		}
-		b.WriteString(s[last:loc[0]])
-		term := s[loc[0]:loc[1]]
-		b.WriteString(fn(term, g.terms[term]))
-		last = loc[1]
+		word := firstWord(s[i:])
+		match := ""
+		for _, k := range g.byFirst[word] {
+			if strings.HasPrefix(s[i:], k) && (i+len(k) == len(s) || !isWordByte(s, i+len(k))) {
+				match = k
+				break
+			}
+		}
+		if match == "" {
+			i += len(word)
+			continue
+		}
+		b.WriteString(s[last:i])
+		b.WriteString(fn(match, g.terms[match]))
+		i += len(match)
+		last = i
 	}
 	b.WriteString(s[last:])
 	return b.String()
