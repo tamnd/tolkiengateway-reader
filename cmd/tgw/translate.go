@@ -40,9 +40,18 @@ func runTranslate(args []string) error {
 	workers := fs.Int("workers", 0, "parallel translation workers; defaults to fleet capacity")
 	noTunnels := fs.Bool("no-tunnels", false, "do not start SSH tunnels; use already-running local endpoints")
 	dirs := fs.String("dirs", "main", "comma-separated namespace directories or pages under content/<source-lang> to translate, or @file for one per line")
+	glossaryFile := fs.String("glossary-file", "", "terms to hold each passage to; defaults to .tgw/glossary.tsv")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *glossaryFile == "" {
+		*glossaryFile = filepath.Join(*root, ".tgw", "glossary.tsv")
+	}
+	gloss, err := loadGlossary(*glossaryFile)
+	if err != nil {
+		return err
+	}
+	passageGlossary = gloss
 	if strings.TrimSpace(*sourceLang) == "" || strings.TrimSpace(*targetLang) == "" || *sourceLang == *targetLang {
 		return fmt.Errorf("source and target languages must be non-empty and different")
 	}
@@ -378,7 +387,19 @@ func translateDocument(ctx context.Context, pool *route.Pool, log *ledger.Log, c
 	return out.String(), nil
 }
 
+// passageGlossary holds each passage to the terms the corpus settled on.
+var passageGlossary *glossary
+
+// passageInstruction adds the style guide and the glossary terms in a
+// passage to the instruction. They are left out of the prompt template, so
+// that changing them does not queue every finished page again.
+func passageInstruction(instruction, source string) string {
+	terms := glossaryFor(passageGlossary, source)
+	return instruction + "\n\n" + styleGuide + "\nGlossary for this passage, to use exactly:\n" + terms
+}
+
 func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job queue.Job, index int, instruction, source string) (string, error) {
+	instruction = passageInstruction(instruction, source)
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		r, client, release, err := pickRoute(ctx, pool)
@@ -397,7 +418,7 @@ func translateChunk(ctx context.Context, pool *route.Pool, log *ledger.Log, job 
 			continue
 		}
 		pool.Succeed(r.Name)
-		text := matchSpacing(source, unescapeMarks(source, unlinkURLs(source, unfence(response.Text))))
+		text := matchSpacing(source, applyRules(unescapeMarks(source, unlinkURLs(source, unfence(response.Text)))))
 		if err := validateChunk(source, text); err != nil {
 			lastErr = fmt.Errorf("%w: %v", errInvalid, err)
 			continue

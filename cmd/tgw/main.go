@@ -33,6 +33,10 @@ func main() {
 		err = runMT(os.Args[2:])
 	case "qa":
 		err = runQA(os.Args[2:])
+	case "phrases":
+		err = runPhrases(os.Args[2:])
+	case "rules":
+		err = runRules(os.Args[2:])
 	case "review":
 		err = runReview(os.Args[2:])
 	case "crawl":
@@ -55,5 +59,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tgw <version|crawl|convert|skin|acquire|extract|translate|mt|qa|review|sync|publish|audit> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: tgw <version|crawl|convert|skin|acquire|extract|translate|mt|qa|rules|phrases|review|sync|publish|audit> [flags]")
 }

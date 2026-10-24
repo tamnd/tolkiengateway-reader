@@ -37,8 +37,8 @@ var (
 	maskInitials = regexp.MustCompile(`\b(?:[A-Z]\.\s?){1,3}[A-Z]\p{Ll}+|\b(?:[A-Z]\.){2,}`)
 	maskStrong   = regexp.MustCompile(`\*\*(\S|\S[^\n]*?\S)\*\*`)
 	maskPrefix   = regexp.MustCompile(`^(\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s*)*)`)
-	maskOwnTag   = regexp.MustCompile(`^</?[xabi]\d+/?>$`)
-	maskTag      = regexp.MustCompile(`<\s*(/?)\s*([xabi]\d+)\s*(/?)\s*>`)
+	maskOwnTag   = regexp.MustCompile(`^</?[xabih]\d+/?>$`)
+	maskTag      = regexp.MustCompile(`<\s*(/?)\s*([xabih]\d+)\s*(/?)\s*>`)
 	maskTarget   = regexp.MustCompile(`\]\([^)]*\)`)
 )
 
@@ -310,8 +310,8 @@ func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
 func (m masked) unmask(text string) (string, error) {
 	// Engines put spaces just inside a pair that the source did not have,
 	// and in Markdown "** text **" is no longer emphasis.
-	text = regexp.MustCompile(`(<[abi]\d+>)[ \t]+`).ReplaceAllString(text, "$1")
-	text = regexp.MustCompile(`[ \t]+(</[abi]\d+>)`).ReplaceAllString(text, "$1")
+	text = regexp.MustCompile(`(<[abih]\d+>)[ \t]+`).ReplaceAllString(text, "$1")
+	text = regexp.MustCompile(`[ \t]+(</[abih]\d+>)`).ReplaceAllString(text, "$1")
 
 	var out []byte
 	var problems []string
@@ -365,6 +365,12 @@ func (m masked) unmask(text string) (string, error) {
 			out = append(out, "**"...)
 		case 'i':
 			out = append(out, '*')
+		case 'h':
+			if closing {
+				out = append(out, p.extra...)
+			} else {
+				out = append(out, p.payload...)
+			}
 		}
 		restored = len(out)
 	}

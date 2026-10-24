@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +22,7 @@ import (
 	"github.com/tamnd/llm/route"
 )
 
-//go:embed prompts/review.md
+//go:embed prompts/review.md prompts/style.md
 var reviewPrompts embed.FS
 
 // runReview is the model layer of the quality harness. It sends paragraphs,
@@ -125,9 +126,9 @@ func runReview(args []string) error {
 		go func() {
 			defer wg.Done()
 			for b := range work {
-				instruction, err := template.Render(map[string]string{"LANGUAGE": "Vietnamese", "GLOSSARY": reviewGlossary(gloss, b)})
+				instruction, err := template.Render(map[string]string{"LANGUAGE": "Vietnamese", "STYLE": styleGuide, "GLOSSARY": reviewGlossary(gloss, b)})
 				if err == nil {
-					err = reviewBatch(ctx, pool, log, instruction, b)
+					err = reviewBatch(ctx, pool, log, gloss, instruction, b)
 				}
 				mu.Lock()
 				if err != nil {
@@ -166,6 +167,9 @@ type reviewItem struct {
 	VI      string        `json:"vi"`
 	Verdict *reviewAnswer `json:"verdict,omitempty"`
 	Applied string        `json:"applied,omitempty"` // yes, or why the fix was not
+	// Context is how the page opens in VI, for the pronouns and terms it
+	// has settled on.
+	Context string `json:"-"`
 }
 
 type reviewAnswer struct {
@@ -244,6 +248,7 @@ func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pa
 		if !ok {
 			continue
 		}
+		context := pageContext(ep, vp)
 		for i := range vp {
 			e := ep[i]
 			if e == vp[i] || len(e) < 40 || len(e) > 3000 || strings.HasPrefix(e, "|") || !hasLetters(e) || done[reviewKey(page, e)] {
@@ -252,13 +257,27 @@ func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pa
 			if isCitation(strings.TrimLeft(e, "-*+ ")) {
 				continue
 			}
-			out = append(out, &reviewItem{Page: page, Para: i, Engine: "google", Why: "pass", EN: e, VI: vp[i]})
+			out = append(out, &reviewItem{Page: page, Para: i, Engine: "google", Why: "pass", EN: e, VI: vp[i], Context: context})
 			if limit > 0 && len(out) >= limit {
 				return out
 			}
 		}
 	}
 	return out
+}
+
+// pageContext is the first translated paragraph of a page, cut short.
+func pageContext(ep, vp []string) string {
+	for i := range vp {
+		if vp[i] != ep[i] && len(vp[i]) >= 80 && !strings.HasPrefix(vp[i], "|") {
+			r := []rune(maskTarget.ReplaceAllString(vp[i], "]"))
+			if len(r) > 400 {
+				r = append(r[:400], '…')
+			}
+			return string(r)
+		}
+	}
+	return ""
 }
 
 func reviewKey(page, en string) string { return page + "\x00" + en }
@@ -359,12 +378,37 @@ func loadGlossary(path string) (*glossary, error) {
 	return withFixes(newGlossary(terms)), nil
 }
 
+//go:embed prompts/style.md
+var styleGuide string
+
+// pageTitle turns a page path such as main/F/Frodo_Baggins.md into its title.
+func pageTitle(page string) string {
+	name := strings.TrimSuffix(filepath.Base(page), ".md")
+	if t, err := url.PathUnescape(name); err == nil {
+		name = t
+	}
+	return strings.ReplaceAll(name, "_", " ")
+}
+
 // reviewGlossary lists the glossary terms that occur in a batch.
 func reviewGlossary(g *glossary, items []*reviewItem) string {
-	used := map[string]string{}
+	var texts []string
 	for _, it := range items {
-		g.replace(it.EN, func(term, vi string) string { used[term] = vi; return term })
-		for text := range linkTexts(it.EN) {
+		texts = append(texts, it.EN)
+	}
+	return glossaryFor(g, texts...)
+}
+
+// glossaryFor lists the glossary terms that occur in some texts, as words
+// or as the text of a link.
+func glossaryFor(g *glossary, texts ...string) string {
+	if g == nil {
+		return "(none)"
+	}
+	used := map[string]string{}
+	for _, t := range texts {
+		g.replace(t, func(term, vi string) string { used[term] = vi; return term })
+		for text := range linkTexts(t) {
 			if vi, ok := g.terms[text]; ok {
 				used[text] = vi
 			}
@@ -385,9 +429,16 @@ func reviewGlossary(g *glossary, items []*reviewItem) string {
 	return b.String()
 }
 
-func reviewBatch(ctx context.Context, pool *route.Pool, log *ledger.Log, instruction string, items []*reviewItem) error {
+func reviewBatch(ctx context.Context, pool *route.Pool, log *ledger.Log, gloss *glossary, instruction string, items []*reviewItem) error {
 	var in strings.Builder
 	for i, it := range items {
+		if i == 0 || it.Page != items[i-1].Page {
+			fmt.Fprintf(&in, "## PAGE: %s\n", pageTitle(it.Page))
+			if it.Context != "" {
+				fmt.Fprintf(&in, "CONTEXT: %s\n", it.Context)
+			}
+			in.WriteString("\n")
+		}
 		fmt.Fprintf(&in, "### Item %d\nEN:\n%s\n\nVI:\n%s\n\n", i+1, it.EN, it.VI)
 	}
 	var lastErr error
@@ -416,8 +467,12 @@ func reviewBatch(ctx context.Context, pool *route.Pool, log *ledger.Log, instruc
 		for _, a := range answers {
 			if a.ID >= 1 && a.ID <= len(items) {
 				// A small judge lists words it would keep as they are.
+				// Nor is a term that follows the glossary an error.
 				kept := a.Errors[:0]
 				for _, e := range a.Errors {
+					if vi, ok := gloss.terms[strings.TrimSpace(e.EN)]; ok && strings.EqualFold(vi, strings.TrimSpace(e.Bad)) {
+						continue
+					}
 					if !strings.EqualFold(strings.TrimSpace(e.Bad), strings.TrimSpace(e.Good)) {
 						kept = append(kept, e)
 					}
@@ -466,7 +521,7 @@ func (it *reviewItem) applyFix(root, targetLang string) {
 		it.Applied = "fix without errors"
 		return
 	}
-	fix = politePronouns(fix)
+	fix = applyRules(politePronouns(fix))
 	path := filepath.Join(root, "content", targetLang, it.Page)
 	data, err := os.ReadFile(path)
 	if err != nil || strings.Count(string(data), it.VI) != 1 {

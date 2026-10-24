@@ -12,9 +12,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"html"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // runMT translates pages with Google Translate. It is far faster than the
@@ -38,7 +42,9 @@ func runMT(args []string) error {
 	evalOut := fs.String("eval-out", "", "where -eval writes its results")
 	useGlossary := fs.Bool("glossary", true, "give Google the terms ChatGPT's translations settled on")
 	glossaryFile := fs.String("glossary-file", "", "read the glossary from this file instead of mining the corpus")
-	fill := fs.Bool("fill", false, "in pages ChatGPT translated, translate only the paragraphs it left in English")
+	fill := fs.Bool("fill", false, "in translated pages, translate only the paragraphs and HTML text still in English")
+	all := fs.Bool("all", false, "with -fill, fill Google's pages too, not only ChatGPT's")
+	phrasesFile := fs.String("phrases", "", "table of short HTML phrases; defaults to .tgw/phrases.tsv")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,6 +54,13 @@ func runMT(args []string) error {
 		// captcha page, which must count as a refusal, not be followed.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
+	if *phrasesFile == "" {
+		*phrasesFile = filepath.Join(*root, ".tgw", "phrases.tsv")
+	}
+	var err error
+	if htmlPhrases, err = loadPhrases(*phrasesFile); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	logPath := filepath.Join(*root, ".tgw", "mt.jsonl")
 	var gloss *glossary
@@ -95,7 +108,7 @@ func runMT(args []string) error {
 		}
 		kept := pages[:0]
 		for _, p := range pages {
-			if _, err := os.Stat(p.output); err == nil && !google[p.page] {
+			if _, err := os.Stat(p.output); err == nil && (*all || !google[p.page]) {
 				kept = append(kept, p)
 			}
 		}
@@ -164,7 +177,7 @@ func runMT(args []string) error {
 			fmt.Fprintln(os.Stderr, "mt: skipped", err)
 			continue
 		}
-		if *fill && len(d.units) == 0 {
+		if *fill && len(d.units) == 0 && d.phrases == 0 {
 			continue
 		}
 		group = append(group, d)
@@ -222,6 +235,14 @@ type mtUnit struct {
 	m      masked
 	answer string // Google's text for m.text
 	text   string // the Markdown translation, once it passed every check
+	quote  bool   // whether the paragraph is a YAML string in front matter
+}
+
+func (u *mtUnit) out(text string) string {
+	if u.quote {
+		return strconv.Quote(text)
+	}
+	return text
 }
 
 // mtDoc is a page cut into the pieces that are copied and the paragraphs
@@ -231,7 +252,11 @@ type mtDoc struct {
 	pieces               []string  // verbatim text, or "" where a unit goes
 	slots                []*mtUnit // per piece, nil for verbatim
 	units                []*mtUnit
+	phrases              int // HTML phrases put in from the table
 }
+
+// htmlPhrases is the table of short HTML phrases.
+var htmlPhrases phraseTable
 
 // fillDoc reads a page ChatGPT translated and makes units of only the
 // paragraphs still identical to the English source.
@@ -244,11 +269,22 @@ func fillDoc(p mtPage, gloss *glossary) (*mtDoc, error) {
 	for _, para := range pageParagraphs(string(en)) {
 		english[para] = true
 	}
+	for _, span := range pageSpans(string(en)) {
+		english[span] = true
+	}
+	if v, ok := shortDescription(frontMatter(string(en))); ok {
+		english[shortKey+v] = true
+	}
 	return newMTDoc(p.page, p.output, p.output, gloss, english)
 }
 
-// newMTDoc cuts a page into paragraphs to translate. With only set, just
-// the paragraphs in it are, and the rest is kept as it is.
+// shortKey marks the short description in the set of English paragraphs.
+const shortKey = "short_description\x00"
+
+// newMTDoc cuts a page into paragraphs to translate: its prose, the runs of
+// text in its blocks of HTML, and the short description shown under its
+// title. With only set, just the paragraphs in it are, and the rest is kept
+// as it is.
 func newMTDoc(page, source, output string, gloss *glossary, only map[string]bool) (d *mtDoc, err error) {
 	// A page the masker trips on is skipped, not the whole run.
 	defer func() {
@@ -262,10 +298,10 @@ func newMTDoc(page, source, output string, gloss *glossary, only map[string]bool
 	}
 	d = &mtDoc{page: page, output: output, source: strings.ReplaceAll(string(data), "\r\n", "\n")}
 	head := frontMatter(d.source)
-	d.add(head, nil)
+	d.addHead(head, gloss, only)
 	for _, chunk := range splitTranslation(d.source[len(head):]) {
 		if chunk.verbatim {
-			d.add(chunk.text, nil)
+			d.addHTML(chunk.text, gloss, only)
 			continue
 		}
 		for _, block := range splitBlocks(chunk.text) {
@@ -281,6 +317,67 @@ func newMTDoc(page, source, output string, gloss *glossary, only map[string]bool
 		}
 	}
 	return d, nil
+}
+
+// addHTML adds a block of raw HTML, with a unit for each run of text in it
+// worth translating.
+func (d *mtDoc) addHTML(block string, gloss *glossary, only map[string]bool) {
+	last := 0
+	for _, s := range htmlSpans(block) {
+		span := block[s.start:s.end]
+		if only != nil && !only[span] {
+			continue
+		}
+		if vi, ok := htmlPhrases.phraseFor(span); ok {
+			d.add(block[last:s.start]+vi, nil)
+			d.phrases++
+			last = s.end
+			continue
+		}
+		if !htmlTranslatable(span) {
+			continue
+		}
+		m, err := maskHTML(span, gloss)
+		if err != nil {
+			continue
+		}
+		d.add(block[last:s.start], nil)
+		u := &mtUnit{source: span, m: m}
+		d.units = append(d.units, u)
+		d.add("", u)
+		last = s.end
+	}
+	d.add(block[last:], nil)
+}
+
+var shortLine = regexp.MustCompile(`(?m)^short_description: (.+)$`)
+
+// shortDescription reads the short description from front matter.
+func shortDescription(head string) (string, bool) {
+	m := shortLine.FindStringSubmatch(head)
+	if m == nil {
+		return "", false
+	}
+	var v string
+	if err := yaml.Unmarshal([]byte(m[1]), &v); err != nil || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// addHead adds the front matter, with a unit for the short description.
+func (d *mtDoc) addHead(head string, gloss *glossary, only map[string]bool) {
+	loc := shortLine.FindStringSubmatchIndex(head)
+	v, ok := shortDescription(head)
+	if !ok || !htmlTranslatable(html.EscapeString(v)) || only != nil && !only[shortKey+v] {
+		d.add(head, nil)
+		return
+	}
+	d.add(head[:loc[2]], nil)
+	u := &mtUnit{source: v, m: maskMarkdown(v, gloss), quote: true}
+	d.units = append(d.units, u)
+	d.add("", u)
+	d.add(head[loc[3]:], nil)
 }
 
 func (d *mtDoc) add(text string, u *mtUnit) {
@@ -308,9 +405,9 @@ func (d *mtDoc) assemble() (string, int) {
 			b.WriteString(piece)
 		case u.text == "":
 			failed++
-			b.WriteString(u.source)
+			b.WriteString(u.out(u.source))
 		default:
-			b.WriteString(u.text)
+			b.WriteString(u.out(u.text))
 		}
 	}
 	return b.String(), failed
@@ -333,7 +430,7 @@ func (u *mtUnit) check() error {
 	if err := checkNumbers(u.m.text, u.answer); err != nil {
 		return err
 	}
-	text = matchSpacing(u.source, politePronouns(text))
+	text = matchSpacing(u.source, applyRules(politePronouns(text)))
 	if err := validateChunk(u.source, text); err != nil {
 		return err
 	}

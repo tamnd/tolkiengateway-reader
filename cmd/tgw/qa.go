@@ -133,6 +133,25 @@ type qaResult struct {
 
 // pageParagraphs lists the prose paragraphs of a page, in order, the way
 // tgw translate and tgw mt cut it: raw HTML blocks are left out.
+// pageSpans lists the runs of text in a page's blocks of HTML that would
+// be translated.
+func pageSpans(text string) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	head := frontMatter(text)
+	var out []string
+	for _, chunk := range splitTranslation(text[len(head):]) {
+		if !chunk.verbatim {
+			continue
+		}
+		for _, s := range htmlSpans(chunk.text) {
+			if span := chunk.text[s.start:s.end]; htmlTranslatable(span) || plainSpan.MatchString(span) {
+				out = append(out, span)
+			}
+		}
+	}
+	return out
+}
+
 func pageParagraphs(text string) []string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	head := frontMatter(text)
@@ -151,7 +170,7 @@ func pageParagraphs(text string) []string {
 }
 
 var (
-	qaLeftTag = regexp.MustCompile(`<\s*/?\s*[xabi]\d+\s*/?\s*>`)
+	qaLeftTag = regexp.MustCompile(`<\s*/?\s*[xabih]\d+\s*/?\s*>`)
 	// A link glued to the word after it, or to the word before it.
 	qaLinkThenWord = regexp.MustCompile(`\]\([^)\s]*\)\p{L}`)
 	qaWordThenLink = regexp.MustCompile(`\p{L}\[[^\]]+\]\(`)
