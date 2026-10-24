@@ -65,7 +65,7 @@ func buildGlossary(root, sourceLang, targetLang string, skip map[string]bool) (*
 			terms[text] = vi
 		}
 	}
-	return newGlossary(terms), nil
+	return withFixes(newGlossary(terms)), nil
 }
 
 // linkTexts lists the texts of the links to each target, in order.
@@ -144,6 +144,27 @@ func startsUpper(s string) bool {
 		return r >= 'A' && r <= 'Z' || r > 127 && strings.ToUpper(string(r)) == string(r) && strings.ToLower(string(r)) != string(r)
 	}
 	return false
+}
+
+// glossaryFixes win over what the corpus settled on: terms ChatGPT left
+// half in English or rarely linked, which Google then renders its own way,
+// Thời đại thứ hai for Second Age and Yêu tinh for elves.
+var glossaryFixes = map[string]string{
+	"Second Age": "Kỷ Đệ Nhị",
+	"Mount Doom": "Núi Diệt Vong",
+	"elves":      "Tiên tộc",
+	"elf":        "Tiên",
+}
+
+func withFixes(g *glossary) *glossary {
+	terms := map[string]string{}
+	for k, v := range g.terms {
+		terms[k] = v
+	}
+	for k, v := range glossaryFixes {
+		terms[k] = v
+	}
+	return newGlossary(terms)
 }
 
 func newGlossary(terms map[string]string) *glossary {

@@ -287,7 +287,7 @@ func loadGlossary(path string) (*glossary, error) {
 			terms[en] = vi
 		}
 	}
-	return newGlossary(terms), nil
+	return withFixes(newGlossary(terms)), nil
 }
 
 // reviewGlossary lists the glossary terms that occur in a batch.

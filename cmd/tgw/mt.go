@@ -37,6 +37,7 @@ func runMT(args []string) error {
 	evalIn := fs.String("eval", "", "translate the chunks of an mteval sample.jsonl instead of pages")
 	evalOut := fs.String("eval-out", "", "where -eval writes its results")
 	useGlossary := fs.Bool("glossary", true, "give Google the terms ChatGPT's translations settled on")
+	glossaryFile := fs.String("glossary-file", "", "read the glossary from this file instead of mining the corpus")
 	fill := fs.Bool("fill", false, "in pages ChatGPT translated, translate only the paragraphs it left in English")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -50,7 +51,12 @@ func runMT(args []string) error {
 	ctx := context.Background()
 	logPath := filepath.Join(*root, ".tgw", "mt.jsonl")
 	var gloss *glossary
-	if *useGlossary {
+	if *glossaryFile != "" {
+		var err error
+		if gloss, err = loadGlossary(*glossaryFile); err != nil {
+			return err
+		}
+	} else if *useGlossary {
 		skip, err := mtLogged(logPath)
 		if err != nil {
 			return err
@@ -60,6 +66,13 @@ func runMT(args []string) error {
 		}
 		if err := gloss.save(filepath.Join(*root, ".tgw", "glossary.tsv")); err != nil {
 			return err
+		}
+	}
+	if gloss != nil {
+		// A corpus without ChatGPT's pages mines nothing, and Google left
+		// alone writes Yêu tinh for Elves.
+		if len(gloss.terms) < 100 {
+			return fmt.Errorf("glossary of only %d terms; pass -glossary-file or -glossary=false", len(gloss.terms))
 		}
 		fmt.Printf("mt: glossary of %d terms\n", len(gloss.terms))
 	}
