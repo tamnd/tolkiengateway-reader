@@ -209,11 +209,26 @@ func firstWord(s string) string {
 // replace calls fn on every whole-word glossary term in s, the longest at
 // each place.
 func (g *glossary) replace(s string, fn func(term, vi string) string) string {
-	if g == nil || len(g.byFirst) == 0 {
-		return s
-	}
 	var b strings.Builder
 	last := 0
+	g.each(s, func(term string, at int) {
+		b.WriteString(s[last:at])
+		b.WriteString(fn(term, g.terms[term]))
+		last = at + len(term)
+	})
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// each calls fn with every whole-word glossary term in s and where it
+// starts, the longest at each place.
+func (g *glossary) each(s string, fn func(term string, at int)) {
+	if g == nil || len(g.byFirst) == 0 {
+		return
+	}
 	for i := 0; i < len(s); {
 		if !isWordByte(s, i) || i > 0 && isWordByte(s, i-1) {
 			_, n := utf8.DecodeRuneInString(s[i:])
@@ -232,13 +247,9 @@ func (g *glossary) replace(s string, fn func(term, vi string) string) string {
 			i += len(word)
 			continue
 		}
-		b.WriteString(s[last:i])
-		b.WriteString(fn(match, g.terms[match]))
+		fn(match, i)
 		i += len(match)
-		last = i
 	}
-	b.WriteString(s[last:])
-	return b.String()
 }
 
 func (g *glossary) save(path string) error {

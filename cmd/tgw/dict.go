@@ -218,6 +218,7 @@ func runDict(args []string) error {
 	batch := fs.Int("batch", 60, "terms per request")
 	audit := fs.Int("audit", 0, "list the terms and pages, this many of each, whose Vietnamese misses the dictionary's")
 	targetLang := fs.String("target-lang", "vi", "target language directory")
+	titles := fs.Bool("titles", false, "take out the terms the English mostly uses inside titles of works, which stay in English")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -228,6 +229,9 @@ func runDict(args []string) error {
 	}
 	if *audit > 0 {
 		return dictAudit(*root, *sourceLang, *targetLang, done, *audit)
+	}
+	if *titles {
+		return dictTitles(*root, *sourceLang, out, done)
 	}
 	gloss, err := loadGlossary(filepath.Join(*root, ".tgw", "glossary.tsv"))
 	if err != nil {
@@ -356,16 +360,125 @@ Input is a JSON array of {"term", "example"}. Return only a JSON object mapping 
 Glossary already settled:
 %s`
 
-// dictAudit lists the pages whose Vietnamese lacks a dictionary term's
-// Vietnamese where the English uses the term, most misses first.
-func dictAudit(root, sourceLang, targetLang string, dict map[string]string, top int) error {
+// dictTerms is the glossary of the terms the dictionary translates.
+func dictTerms(dict map[string]string) *glossary {
 	terms := map[string]string{}
 	for en, vi := range dict {
 		if vi != en && vi != dictNotTerm {
 			terms[en] = vi
 		}
 	}
-	g := newGlossary(terms)
+	return newGlossary(terms)
+}
+
+// dictMisses lists the dictionary terms the English uses whose Vietnamese
+// the translation lacks.
+func dictMisses(dict *glossary, en, vi string) []string {
+	var miss []string
+	low := strings.ToLower(vi)
+	seen := map[string]bool{}
+	dict.replace(proseText(en), func(term, want string) string {
+		if !seen[term] && !strings.Contains(low, strings.ToLower(want)) {
+			miss = append(miss, term)
+		}
+		seen[term] = true
+		return term
+	})
+	return miss
+}
+
+// titleText is text in italics or quotes, where the wiki puts titles of
+// works and chapters.
+var titleText = regexp.MustCompile(`\*[^*\n]+\*|"[^"\n]{1,100}"|“[^”\n]{1,100}”`)
+
+// titleCase reports whether a quoted text reads as a title: a few words,
+// each capitalised but the small ones.
+func titleCase(q string) bool {
+	words := htmlWord.FindAllString(q, -1)
+	if len(words) == 0 || len(words) > 10 {
+		return false
+	}
+	for _, w := range words {
+		if r := []rune(w); unicode.IsLower(r[0]) && !htmlStop[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// midThe matches a The that opens a title inside a sentence: "in The Two
+// Towers", "[The Tale of Tinúviel](...)".
+var midThe = regexp.MustCompile(`(?:\p{Ll}[,:]? |[\[*"“(])The $`)
+
+// dictTitles takes out of the dictionary the terms the English uses mostly
+// inside titles of works, The Return of the King or Realms in Exile, where
+// they stay in English. Titles are in italics or quotes, or follow a The
+// inside a sentence; a The at a sentence start says nothing, and the Great
+// River is still Đại Hà.
+func dictTitles(root, sourceLang, out string, dict map[string]string) error {
+	g := dictTerms(dict)
+	uses, inTitle := map[string]int{}, map[string]int{}
+	err := filepath.WalkDir(filepath.Join(root, "content", sourceLang), func(path string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() || filepath.Ext(path) != ".md" {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// What a reader sees, italics kept: no tags, no link targets.
+		text := strings.NewReplacer("<i>", "*", "</i>", "*").Replace(string(data))
+		text = proseDrop.ReplaceAllString(maskLink.ReplaceAllString(text, "$1"), " ")
+		var spans [][]int
+		for _, sp := range titleText.FindAllStringIndex(text, -1) {
+			if text[sp[0]] == '*' || titleCase(text[sp[0]:sp[1]]) {
+				spans = append(spans, sp)
+			}
+		}
+		g.each(text, func(term string, at int) {
+			uses[term]++
+			title := midThe.MatchString(text[max(0, at-12):at])
+			for _, sp := range spans {
+				if sp[0] <= at && at < sp[1] {
+					title = true
+					break
+				}
+			}
+			if title {
+				inTitle[term]++
+			}
+		})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var drop []string
+	for term, n := range uses {
+		// Half its uses in titles make it a title's words.
+		if inTitle[term]*2 >= n {
+			drop = append(drop, term)
+		}
+	}
+	sort.Slice(drop, func(i, j int) bool { return uses[drop[i]] > uses[drop[j]] })
+	f, err := os.OpenFile(out, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	for _, term := range drop {
+		fmt.Printf("%6d %6d  %s = %s\n", uses[term], inTitle[term], term, dict[term])
+		fmt.Fprintf(w, "%s\t%s\twork title, stays in English\n", term, dictNotTerm)
+	}
+	fmt.Printf("dict: %d terms are words of titles, taken out\n", len(drop))
+	return w.Flush()
+}
+
+// dictAudit lists the pages whose Vietnamese lacks a dictionary term's
+// Vietnamese where the English uses the term, most misses first.
+func dictAudit(root, sourceLang, targetLang string, dict map[string]string, top int) error {
+	g := dictTerms(dict)
 	type miss struct {
 		page string
 		n    int
@@ -387,17 +500,12 @@ func dictAudit(root, sourceLang, targetLang string, dict map[string]string, top 
 		if err != nil {
 			return nil
 		}
-		used := map[string]bool{}
-		g.replace(proseText(string(en)), func(term, _ string) string { used[term] = true; return term })
-		low := strings.ToLower(string(vi))
 		m := miss{page: filepath.ToSlash(rel)}
-		for term := range used {
-			if !strings.Contains(low, strings.ToLower(terms[term])) {
-				m.n++
-				counts[term]++
-				if len(m.eg) < 3 {
-					m.eg = append(m.eg, term)
-				}
+		for _, term := range dictMisses(g, string(en), string(vi)) {
+			m.n++
+			counts[term]++
+			if len(m.eg) < 3 {
+				m.eg = append(m.eg, term)
 			}
 		}
 		if m.n > 0 {
@@ -416,7 +524,7 @@ func dictAudit(root, sourceLang, targetLang string, dict map[string]string, top 
 	}
 	sort.Slice(keys, func(i, j int) bool { return counts[keys[i]] > counts[keys[j]] })
 	for _, k := range keys[:min(top, len(keys))] {
-		fmt.Printf("%8d  %s = %s\n", counts[k], k, terms[k])
+		fmt.Printf("%8d  %s = %s\n", counts[k], k, g.terms[k])
 	}
 	for _, m := range misses[:min(top, len(misses))] {
 		fmt.Printf("%4d  %s  %s\n", m.n, m.page, strings.Join(m.eg, ", "))

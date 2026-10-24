@@ -88,7 +88,11 @@ func runReview(args []string) error {
 		if err != nil {
 			return err
 		}
-		items = reviewPages(*root, *sourceLang, *targetLang, google, pages, done, *limit)
+		dict, err := loadDict(filepath.Join(*root, ".tgw", "dict.tsv"))
+		if err != nil {
+			return err
+		}
+		items = reviewPages(*root, *sourceLang, *targetLang, google, dictTerms(dict), pages, done, *limit)
 	} else {
 		sampled, err := reviewSample(*root, *sourceLang, *targetLang, google, rng, *sample)
 		if err != nil {
@@ -241,7 +245,10 @@ func reviewSample(root, sourceLang, targetLang string, google map[string]bool, r
 // reviewPages lists the paragraphs Google wrote on the given pages, in
 // order, leaving out those already reviewed and those with nothing to
 // judge: short ones, tables, citations and text left in English.
-func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pages []string, done map[string]bool, limit int) []*reviewItem {
+// reviewPages lists the items of the given pages not yet judged: the HTML
+// text of every page, every paragraph of Google's pages, and the paragraphs
+// of the other pages that miss a dictionary term.
+func reviewPages(root, sourceLang, targetLang string, google map[string]bool, dict *glossary, pages []string, done map[string]bool, limit int) []*reviewItem {
 	var out []*reviewItem
 	for _, page := range pages {
 		ep, vp, ok := readAligned(root, sourceLang, targetLang, page)
@@ -259,9 +266,6 @@ func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pa
 				return out
 			}
 		}
-		if !google[page] {
-			continue
-		}
 		for i := range vp {
 			e := ep[i]
 			if e == vp[i] || len(e) < 40 || len(e) > 3000 || strings.HasPrefix(e, "|") || !hasLetters(e) || done[reviewKey(page, e)] {
@@ -270,7 +274,14 @@ func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pa
 			if isCitation(strings.TrimLeft(e, "-*+ ")) {
 				continue
 			}
-			out = append(out, &reviewItem{Page: page, Para: i, Engine: "google", Why: "pass", EN: e, VI: vp[i], Context: context})
+			engine, why := "google", "pass"
+			if !google[page] {
+				if len(dictMisses(dict, e, vp[i])) == 0 {
+					continue
+				}
+				engine, why = "chatgpt", "dict"
+			}
+			out = append(out, &reviewItem{Page: page, Para: i, Engine: engine, Why: why, EN: e, VI: vp[i], Context: context})
 			if limit > 0 && len(out) >= limit {
 				return out
 			}
