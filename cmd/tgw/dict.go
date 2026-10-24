@@ -310,7 +310,9 @@ func runDict(args []string) error {
 		instruction := fmt.Sprintf(dictPrompt, styleGuide, glossaryFor(gloss, terms...))
 		answer, err := askPhrases(ctx, pool, log, instruction, string(input))
 		if err != nil {
-			return err
+			// The next run asks again.
+			fmt.Printf("dict: %d/%d skipped: %v\n", min(i+*batch, len(ask)), len(ask), err)
+			continue
 		}
 		n := 0
 		for _, c := range part {
