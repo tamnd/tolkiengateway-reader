@@ -34,3 +34,7 @@ re	\((phim|trò chơi điện tử|trò chơi|loạt phim|phim truyền hình|ph
 # Spacing: none before a comma, a stop or a semicolon, one between words.
 re	(\p{L}|\)) +([,.;])( |$)	$1$2$3	space before punctuation
 re	(\p{L}[,.;:]?)  +(\p{L})	$1 $2	double space
+term	ông ta	ông	style: never ông ta in narration
+term	Ông ta	Ông	style
+term	bà ta	bà	style
+term	Bà ta	Bà	style

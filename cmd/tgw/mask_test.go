@@ -209,7 +209,7 @@ func TestMaskKeepsWorksAndCitations(t *testing.T) {
 
 func TestPolitePronouns(t *testing.T) {
 	got := politePronouns("Anh ấy nói anh ta sẽ đi, cô ấy ở lại. Thanh ấy không đổi.")
-	if want := "Ông nói ông ta sẽ đi, bà ở lại. Thanh ấy không đổi."; got != want {
+	if want := "Ông nói ông sẽ đi, bà ở lại. Thanh ấy không đổi."; got != want {
 		t.Fatalf("got %q", got)
 	}
 }

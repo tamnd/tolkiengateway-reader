@@ -328,7 +328,11 @@ func (d *mtDoc) addHTML(block string, gloss *glossary, only map[string]bool) {
 		if only != nil && !only[span] {
 			continue
 		}
-		if vi, ok := htmlPhrases.phraseFor(span); ok {
+		vi, ok := htmlPhrases.phraseFor(span)
+		if !ok && gloss != nil {
+			vi, ok = phraseTable(gloss.terms).phraseFor(span)
+		}
+		if ok {
 			d.add(block[last:s.start]+vi, nil)
 			d.phrases++
 			last = s.end
@@ -640,7 +644,8 @@ func mtEval(ctx context.Context, g *googleMT, gloss *glossary, in, out string, b
 }
 
 // politePronoun swaps the pronouns Google uses for a friend, anh ấy and
-// cô ấy, for those an encyclopedia uses of a grown man or woman.
+// cô ấy, and the cold anh ta and cô ta, for those an encyclopedia uses of a
+// grown man or woman.
 var politePronoun = regexp.MustCompile(`(^|[^\p{L}])([aA]nh|[cC]ô) (ấy|ta)([^\p{L}]|$)`)
 
 func politePronouns(s string) string {
@@ -649,9 +654,6 @@ func politePronouns(s string) string {
 		s = politePronoun.ReplaceAllStringFunc(s, func(m string) string {
 			g := politePronoun.FindStringSubmatch(m)
 			word := map[string]string{"anh": "ông", "Anh": "Ông", "cô": "bà", "Cô": "Bà"}[g[2]]
-			if g[3] == "ta" {
-				word += " ta"
-			}
 			return g[1] + word + g[4]
 		})
 	}
