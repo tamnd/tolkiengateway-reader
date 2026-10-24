@@ -150,10 +150,19 @@ func startsUpper(s string) bool {
 // half in English or rarely linked, which Google then renders its own way,
 // Thời đại thứ hai for Second Age and Yêu tinh for elves.
 var glossaryFixes = map[string]string{
-	"Second Age": "Kỷ Đệ Nhị",
-	"Mount Doom": "Núi Diệt Vong",
-	"elves":      "Tiên tộc",
-	"elf":        "Tiên",
+	"Second Age":  "Kỷ Đệ Nhị",
+	"Mount Doom":  "Núi Diệt Vong",
+	"One Ring":    "Nhẫn Chúa",
+	"Ruling Ring": "Nhẫn Chúa",
+	"First Age":   "Kỷ Đệ Nhất",
+	"Third Age":   "Kỷ Đệ Tam",
+	"Fourth Age":  "Kỷ Đệ Tứ",
+	"Dwarf":       "Người Lùn",
+	"Dwarves":     "Người Lùn",
+	"Ring-bearer": "Người Mang Nhẫn",
+	"Dark Lord":   "Chúa tể Bóng tối",
+	"elves":       "Tiên tộc",
+	"elf":         "Tiên",
 }
 
 func withFixes(g *glossary) *glossary {

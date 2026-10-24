@@ -167,6 +167,9 @@ type reviewItem struct {
 	VI      string        `json:"vi"`
 	Verdict *reviewAnswer `json:"verdict,omitempty"`
 	Applied string        `json:"applied,omitempty"` // yes, or why the fix was not
+	// HTML marks a run of text in a block of raw HTML rather than a
+	// paragraph.
+	HTML bool `json:"html,omitempty"`
 	// Context is how the page opens in VI, for the pronouns and terms it
 	// has settled on.
 	Context string `json:"-"`
@@ -241,14 +244,24 @@ func reviewSample(root, sourceLang, targetLang string, google map[string]bool, r
 func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pages []string, done map[string]bool, limit int) []*reviewItem {
 	var out []*reviewItem
 	for _, page := range pages {
-		if !google[page] {
-			continue
-		}
 		ep, vp, ok := readAligned(root, sourceLang, targetLang, page)
 		if !ok {
 			continue
 		}
 		context := pageContext(ep, vp)
+		// Google wrote the HTML text of every page, so it is all judged.
+		for _, p := range alignedSpans(root, sourceLang, targetLang, page) {
+			if done[reviewKey(page, p[0])] {
+				continue
+			}
+			out = append(out, &reviewItem{Page: page, Para: -1, Engine: "google", Why: "html", EN: p[0], VI: p[1], Context: context, HTML: true})
+			if limit > 0 && len(out) >= limit {
+				return out
+			}
+		}
+		if !google[page] {
+			continue
+		}
 		for i := range vp {
 			e := ep[i]
 			if e == vp[i] || len(e) < 40 || len(e) > 3000 || strings.HasPrefix(e, "|") || !hasLetters(e) || done[reviewKey(page, e)] {
@@ -346,6 +359,47 @@ func reviewWorst(root, sourceLang, targetLang string, checks []string, rng *rand
 		out = append(out, &reviewItem{Page: p.Page, Para: p.Para, Engine: p.Engine, Why: p.Check, EN: ep[p.Para], VI: vp[p.Para]})
 	}
 	return out, s.Err()
+}
+
+// alignedSpans pairs the translated runs of text in a page's HTML with
+// their English, those of at least four words; the page's blocks of HTML
+// and the runs in each must line up one to one.
+func alignedSpans(root, sourceLang, targetLang, page string) [][2]string {
+	e, err := os.ReadFile(filepath.Join(root, "content", sourceLang, page))
+	if err != nil {
+		return nil
+	}
+	v, err := os.ReadFile(filepath.Join(root, "content", targetLang, page))
+	if err != nil {
+		return nil
+	}
+	blocks := func(text string) []string {
+		var out []string
+		for _, c := range splitTranslation(text[len(frontMatter(text)):]) {
+			if c.verbatim {
+				out = append(out, c.text)
+			}
+		}
+		return out
+	}
+	eb, vb := blocks(string(e)), blocks(string(v))
+	if len(eb) != len(vb) {
+		return nil
+	}
+	var out [][2]string
+	for i := range eb {
+		es, vs := htmlSpans(eb[i]), htmlSpans(vb[i])
+		if len(es) != len(vs) {
+			continue
+		}
+		for j := range es {
+			en, vi := eb[i][es[j].start:es[j].end], vb[i][vs[j].start:vs[j].end]
+			if en != vi && len(strings.Fields(htmlVisible(en))) >= 4 && htmlTranslatable(en) {
+				out = append(out, [2]string{en, vi})
+			}
+		}
+	}
+	return out
 }
 
 func readAligned(root, sourceLang, targetLang, page string) (en, vi []string, ok bool) {
@@ -508,7 +562,10 @@ func (it *reviewItem) applyFix(root, targetLang string) {
 	switch {
 	case fix == "" || fix == it.VI:
 		return
-	case validateChunk(it.EN, fix) != nil:
+	case it.HTML && strings.Join(htmlAnyTag.FindAllString(it.VI, -1), "") != strings.Join(htmlAnyTag.FindAllString(fix, -1), ""):
+		it.Applied = "markup: tags changed"
+		return
+	case !it.HTML && validateChunk(it.EN, fix) != nil:
 		it.Applied = "markup: " + validateChunk(it.EN, fix).Error()
 		return
 	case checkNumbers(it.EN, fix) != nil:
