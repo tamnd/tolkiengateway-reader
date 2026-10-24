@@ -1,0 +1,45 @@
+# Post-edit rules for Vietnamese, run on every page and on every engine's
+# output. kind<TAB>from<TAB>to<TAB>note. A term is a whole-word literal; a
+# re is a Go regular expression. Add a rule only when the rewrite is right
+# wherever it matches; what depends on context is left to tgw review.
+#
+# One name for each Tolkien term: the form the corpus uses most.
+term	Chiếc Nhẫn Duy Nhất	Nhẫn Chúa	One Ring
+term	Nhẫn Duy Nhất	Nhẫn Chúa	One Ring
+term	Chiếc Nhẫn Chí Tôn	Nhẫn Chúa	One Ring
+term	Nhẫn Chí Tôn	Nhẫn Chúa	One Ring
+term	Nhẫn Chủ	Nhẫn Chúa	One Ring
+term	Núi Doom	Núi Diệt Vong	Mount Doom
+term	Chúa tể Hắc ám	Chúa tể Bóng tối	Dark Lord
+term	Chúa Tể Hắc Ám	Chúa tể Bóng tối	Dark Lord
+term	Chiến tranh Nhẫn	Cuộc chiến Nhẫn	War of the Ring
+term	Cuộc Chiến Tranh Nhẫn	Cuộc chiến Nhẫn	War of the Ring
+term	Kẻ Mang Nhẫn	Người Mang Nhẫn	Ring-bearer
+term	Hiệp hội Nhẫn	Đoàn Hộ Nhẫn	Fellowship of the Ring
+term	Người lùn	Người Lùn	Dwarves
+term	Người Nửa Phần	Hobbit	Halflings, as the glossary has Hobbit
+# The Ages: Kỷ Đệ Nhất, Nhị, Tam, Tứ, never the calques.
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Nhất|nhất)\b	Kỷ Đệ Nhất	First Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Hai|hai)\b	Kỷ Đệ Nhị	Second Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Ba|ba)\b	Kỷ Đệ Tam	Third Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Tư|tư)\b	Kỷ Đệ Tứ	Fourth Age
+re	(Kỷ nguyên|Thời đại|Thời Đại) (Đệ Nhất|Đệ Nhị|Đệ Tam|Đệ Tứ)	Kỷ $2	Kỷ nguyên Đệ Tam
+# An English article left before a name after a Vietnamese word: "ở the
+# Shire". The word before must be Vietnamese, so a title such as "Return to
+# the Shire" is left alone.
+re	(^|[^\p{L}])((?:[\p{L}]*[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵĐ][\p{L}]*|trong|ra|qua|cho|theo|khi|nhau|sang|xa|kia|nhà|ta|tham gia|gia) )the (\p{Lu})	$1$2$3	the Shire
+re	(^|[^\p{L}])((?:[\p{L}]*[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵĐ][\p{L}]*|trong|ra|qua|cho|theo|khi|nhau|sang|xa|kia|ta) )\[the (\p{Lu})	$1$2[$3	[the Shire](…)
+# A year after a film or a game reads "phim năm 1978".
+re	\((phim|trò chơi điện tử|trò chơi|loạt phim|phim truyền hình|phim hoạt hình) (\d{4})\)	($1 năm $2)	(1978 film)
+# Spacing: none before a comma, a stop or a semicolon, one between words.
+re	(\p{L}|\)) +([,.;])( |$)	$1$2$3	space before punctuation
+re	(\p{L}[,.;:]?)  +(\p{L})	$1 $2	double space
+term	ông ta	ông	style: never ông ta in narration
+term	Ông ta	Ông	style
+term	bà ta	bà	style
+term	Bà ta	Bà	style
+term	The Lord of the Rings Trực tuyến	The Lord of the Rings Online	work title; mined 8 of 8
+term	Phù thủy-Vua	Vua Phù thủy	mined 5 of 5
+term	Những người bạn yêu tinh	Những người bạn của Tiên tộc	Elf-friends; mined 3 of 3
+term	The Lord of the Rings: Trận chiến vì Trung Địa	The Lord of the Rings: The Battle for Middle-earth	work title
+term	The Lord of the Rings: Cuộc chiến Nhẫn	The Lord of the Rings: War of the Ring	work title
