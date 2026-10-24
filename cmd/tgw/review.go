@@ -36,6 +36,8 @@ func runReview(args []string) error {
 	targetLang := fs.String("target-lang", "vi", "target language directory")
 	routeFile := fs.String("routes", "", "llm route registry; defaults to Tolkien Gateway config")
 	sample := fs.Int("sample", 60, "random paragraphs to review per engine")
+	pagesFlag := fs.String("pages", "", "review every paragraph Google wrote on these pages, in order, or @file; replaces -sample and -worst")
+	limit := fs.Int("limit", 0, "with -pages, stop after this many paragraphs")
 	worst := fs.Int("worst", 60, "paragraphs flagged by tgw qa to review")
 	checks := fs.String("checks", "english,glue,term,spaces,punct", "tgw qa checks whose paragraphs count as worst")
 	batch := fs.Int("batch", 12, "paragraphs per request")
@@ -75,15 +77,28 @@ func runReview(args []string) error {
 		return err
 	}
 
-	items, err := reviewSample(*root, *sourceLang, *targetLang, google, rng, *sample)
-	if err != nil {
-		return err
+	var items []*reviewItem
+	if *pagesFlag != "" {
+		pages, err := translateTargets(*pagesFlag)
+		if err != nil {
+			return err
+		}
+		done, err := reviewed(*out)
+		if err != nil {
+			return err
+		}
+		items = reviewPages(*root, *sourceLang, *targetLang, google, pages, done, *limit)
+	} else {
+		sampled, err := reviewSample(*root, *sourceLang, *targetLang, google, rng, *sample)
+		if err != nil {
+			return err
+		}
+		flagged, err := reviewWorst(*root, *sourceLang, *targetLang, strings.Split(*checks, ","), rng, *worst)
+		if err != nil {
+			return err
+		}
+		items = append(sampled, flagged...)
 	}
-	flagged, err := reviewWorst(*root, *sourceLang, *targetLang, strings.Split(*checks, ","), rng, *worst)
-	if err != nil {
-		return err
-	}
-	items = append(items, flagged...)
 	fmt.Printf("review: %d paragraphs (seed %d)\n", len(items), *seed)
 
 	logFile, err := os.OpenFile(*out, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -214,6 +229,60 @@ func reviewSample(root, sourceLang, targetLang string, google map[string]bool, r
 		taken[engine]++
 	}
 	return out, nil
+}
+
+// reviewPages lists the paragraphs Google wrote on the given pages, in
+// order, leaving out those already reviewed and those with nothing to
+// judge: short ones, tables, citations and text left in English.
+func reviewPages(root, sourceLang, targetLang string, google map[string]bool, pages []string, done map[string]bool, limit int) []*reviewItem {
+	var out []*reviewItem
+	for _, page := range pages {
+		if !google[page] {
+			continue
+		}
+		ep, vp, ok := readAligned(root, sourceLang, targetLang, page)
+		if !ok {
+			continue
+		}
+		for i := range vp {
+			e := ep[i]
+			if e == vp[i] || len(e) < 40 || len(e) > 3000 || strings.HasPrefix(e, "|") || !hasLetters(e) || done[reviewKey(page, e)] {
+				continue
+			}
+			if isCitation(strings.TrimLeft(e, "-*+ ")) {
+				continue
+			}
+			out = append(out, &reviewItem{Page: page, Para: i, Engine: "google", Why: "pass", EN: e, VI: vp[i]})
+			if limit > 0 && len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func reviewKey(page, en string) string { return page + "\x00" + en }
+
+// reviewed lists the paragraphs the log already has a verdict for.
+func reviewed(path string) (map[string]bool, error) {
+	done := map[string]bool{}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return done, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 1<<20), 4<<20)
+	for s.Scan() {
+		var it reviewItem
+		if json.Unmarshal(s.Bytes(), &it) == nil && it.Verdict != nil {
+			done[reviewKey(it.Page, it.EN)] = true
+		}
+	}
+	return done, s.Err()
 }
 
 // reviewWorst picks paragraphs tgw qa flagged.
@@ -380,7 +449,7 @@ func parseReview(text string) ([]reviewAnswer, error) {
 // source's markup and numbers and the page still has the paragraph that
 // was reviewed.
 func (it *reviewItem) applyFix(root, targetLang string) {
-	fix := strings.TrimSpace(it.Verdict.Fix)
+	fix := restoreTargets(it.VI, strings.TrimSpace(it.Verdict.Fix))
 	switch {
 	case fix == "" || fix == it.VI:
 		return
@@ -390,7 +459,14 @@ func (it *reviewItem) applyFix(root, targetLang string) {
 	case checkNumbers(it.EN, fix) != nil:
 		it.Applied = checkNumbers(it.EN, fix).Error()
 		return
+	case fix == strings.TrimSpace(it.EN) || englishShare(fix) > 0.5:
+		it.Applied = "fix is English"
+		return
+	case len(it.Verdict.Errors) == 0:
+		it.Applied = "fix without errors"
+		return
 	}
+	fix = politePronouns(fix)
 	path := filepath.Join(root, "content", targetLang, it.Page)
 	data, err := os.ReadFile(path)
 	if err != nil || strings.Count(string(data), it.VI) != 1 {
@@ -402,6 +478,25 @@ func (it *reviewItem) applyFix(root, targetLang string) {
 		return
 	}
 	it.Applied = "yes"
+}
+
+// restoreTargets puts back link targets a model rewrote, in order, when
+// the fix has as many links as the paragraph it corrects.
+func restoreTargets(vi, fix string) string {
+	want := chunkLink.FindAllStringSubmatch(vi, -1)
+	got := chunkLink.FindAllStringSubmatchIndex(fix, -1)
+	if len(want) != len(got) {
+		return fix
+	}
+	var b strings.Builder
+	last := 0
+	for i, loc := range got {
+		b.WriteString(fix[last:loc[2]])
+		b.WriteString(want[i][1])
+		last = loc[3]
+	}
+	b.WriteString(fix[last:])
+	return b.String()
 }
 
 // mqmWeight scores an error by severity, as MQM does.
@@ -419,7 +514,7 @@ func reviewReport(items []*reviewItem) {
 			continue
 		}
 		key := it.Engine + " " + it.Why
-		if it.Why != "sample" {
+		if it.Why != "sample" && it.Why != "pass" {
 			key = it.Engine + " flagged"
 		}
 		s := scores[key]

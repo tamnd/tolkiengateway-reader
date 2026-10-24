@@ -213,3 +213,10 @@ func TestPolitePronouns(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestRestoreTargets(t *testing.T) {
+	got := restoreTargets("dì [Jane](Jane_Neave.md) và [Edith](../E/Edith_Tolkien.md)", "dì [Jane](../J/Jane_Neave.md) cùng [Edith](../E/Edith.md)")
+	if want := "dì [Jane](Jane_Neave.md) cùng [Edith](../E/Edith_Tolkien.md)"; got != want {
+		t.Fatalf("got %q", got)
+	}
+}
