@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -319,7 +320,7 @@ func (u *mtUnit) check() error {
 	if err := checkNumbers(u.m.text, u.answer); err != nil {
 		return err
 	}
-	text = matchSpacing(u.source, text)
+	text = matchSpacing(u.source, politePronouns(text))
 	if err := validateChunk(u.source, text); err != nil {
 		return err
 	}
@@ -526,4 +527,23 @@ func mtEval(ctx context.Context, g *googleMT, gloss *glossary, in, out string, b
 		fmt.Fprintln(w, string(line))
 	}
 	return nil
+}
+
+// politePronoun swaps the pronouns Google uses for a friend, anh ấy and
+// cô ấy, for those an encyclopedia uses of a grown man or woman.
+var politePronoun = regexp.MustCompile(`(^|[^\p{L}])([aA]nh|[cC]ô) (ấy|ta)([^\p{L}]|$)`)
+
+func politePronouns(s string) string {
+	// Matches share the boundary between them, so run until none is left.
+	for i := 0; i < 3; i++ {
+		s = politePronoun.ReplaceAllStringFunc(s, func(m string) string {
+			g := politePronoun.FindStringSubmatch(m)
+			word := map[string]string{"anh": "ông", "Anh": "Ông", "cô": "bà", "Cô": "Bà"}[g[2]]
+			if g[3] == "ta" {
+				word += " ta"
+			}
+			return g[1] + word + g[4]
+		})
+	}
+	return s
 }

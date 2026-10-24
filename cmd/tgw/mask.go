@@ -42,6 +42,29 @@ var (
 	maskTarget   = regexp.MustCompile(`\]\([^)]*\)`)
 )
 
+var (
+	// A subtitle after a colon marks the title of a work.
+	maskSubtitle = regexp.MustCompile(`\p{L}: \p{Lu}`)
+	// Surname, Given I. at the head of a list item starts a citation.
+	maskCitation = regexp.MustCompile(`^\p{Lu}[\p{L}'’-]+, (?:\p{Lu}[\p{L}'’-]*\.? ){0,3}(?:\p{Lu}\.|\p{Lu}\p{Ll}+\. [“"*])`)
+	workTitles   = []string{"The Lord of the Rings", "The Hobbit", "The Silmarillion", "Unfinished Tales", "The History of Middle-earth", "The Children of Húrin", "The Letters of J.R.R. Tolkien"}
+)
+
+// isWorkTitle reports whether link text names a book, film or game.
+func isWorkTitle(s string) bool {
+	if maskSubtitle.MatchString(s) && len(strings.Fields(s)) >= 3 {
+		return true
+	}
+	for _, t := range workTitles {
+		if strings.HasPrefix(s, t) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCitation(s string) bool { return maskCitation.MatchString(s) }
+
 // maxTitleWords is the longest italic span kept as written. Longer ones are
 // quotations or emphasis, and are translated.
 const maxTitleWords = 6
@@ -83,8 +106,9 @@ func maskMarkdown(md string, gloss *glossary) masked {
 	}
 	link := func(s string) string {
 		g := maskLink.FindStringSubmatch(s)
-		if !hasLower(g[1]) {
-			// Nothing to translate in [3018](…) or [T.A.](…).
+		if !hasLower(g[1]) || isWorkTitle(g[1]) {
+			// Nothing to translate in [3018](…) or [T.A.](…), and the
+			// titles of works stay in English.
 			return opaque(s)
 		}
 		if gloss != nil {
@@ -113,6 +137,11 @@ func maskMarkdown(md string, gloss *glossary) masked {
 		body := line[len(prefix):]
 		if prefix != "" {
 			prefix = opaque(prefix)
+		}
+		if strings.TrimSpace(prefix) != "" && isCitation(body) {
+			// A bibliography entry: names and a title, all kept.
+			lines[i] = prefix + opaque(body)
+			continue
 		}
 		body = maskSup.ReplaceAllStringFunc(body, opaque)
 		body = replaceItalics(body, func(span string) string {

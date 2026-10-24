@@ -194,3 +194,22 @@ func TestUnmaskSpacesAfterGlossaryLink(t *testing.T) {
 		t.Fatalf("got %q, %v from %q", got, err, answer)
 	}
 }
+
+func TestMaskKeepsWorksAndCitations(t *testing.T) {
+	m := maskMarkdown("A character from [The Lord of the Rings: Heroes of Middle-earth](../T/x.md) and [Elves](../E/Elves.md).\n- GoodKnight, Glen H. Editorial Introduction: Fantasy (3).\n- Hyde, Paul Nolan. “Quenti Lambardillion”\n- Gandalf, a wizard of the Istari.", nil)
+	for _, hidden := range []string{"Heroes", "Editorial", "Quenti"} {
+		if strings.Contains(m.text, hidden) {
+			t.Fatalf("%s left for the engine: %q", hidden, m.text)
+		}
+	}
+	if !strings.Contains(m.text, "Elves") || !strings.Contains(m.text, "wizard") {
+		t.Fatalf("ordinary text hidden: %q", m.text)
+	}
+}
+
+func TestPolitePronouns(t *testing.T) {
+	got := politePronouns("Anh ấy nói anh ta sẽ đi, cô ấy ở lại. Thanh ấy không đổi.")
+	if want := "Ông nói ông ta sẽ đi, bà ở lại. Thanh ấy không đổi."; got != want {
+		t.Fatalf("got %q", got)
+	}
+}
