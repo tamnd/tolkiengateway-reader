@@ -62,3 +62,11 @@ func TestPhraseFor(t *testing.T) {
 		t.Error("phraseFor matched a phrase not in the table")
 	}
 }
+
+func TestRulesWorkTitles(t *testing.T) {
+	in := "2004: The Lord of the Rings: Trận chiến vì Trung Địa II và The Lord of the Rings Trực tuyến"
+	want := "2004: The Lord of the Rings: The Battle for Middle-earth II và The Lord of the Rings Online"
+	if got := applyRules(in); got != want {
+		t.Errorf("got %q", got)
+	}
+}
