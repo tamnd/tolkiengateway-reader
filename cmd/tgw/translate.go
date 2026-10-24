@@ -286,7 +286,10 @@ func validateTranslation(source, text, targetLang string) error {
 	if !strings.HasPrefix(strings.TrimSpace(text), "---") {
 		return fmt.Errorf("translation output has no YAML front matter")
 	}
-	if sourceFrontMatter, outputFrontMatter := frontMatter(source), frontMatter(text); sourceFrontMatter != outputFrontMatter {
+	// The short description is the one field translated.
+	sourceFrontMatter := shortLine.ReplaceAllString(frontMatter(source), "short_description:")
+	outputFrontMatter := shortLine.ReplaceAllString(frontMatter(text), "short_description:")
+	if sourceFrontMatter != outputFrontMatter {
 		return fmt.Errorf("translation output changed YAML front matter")
 	}
 	if targetLang == "vi" && strings.Contains(strings.ToLower(text), "translate the markdown fragment") {
