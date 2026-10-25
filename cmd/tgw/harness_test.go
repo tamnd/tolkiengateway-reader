@@ -106,3 +106,30 @@ func TestGlossaryReplaceLongest(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestVariantFixer(t *testing.T) {
+	dict := map[string]string{"Rangers": "Tuần Du Nhân", "Steward of Gondor": "Quốc quản Gondor"}
+	f := newVariantFixer(dict, map[string][]string{"Rangers": {"kiểm lâm"}, "Steward of Gondor": {"người quản lý gondor"}})
+	cases := []struct{ en, vi, want string }{
+		{"The Rangers came north.", "Các Kiểm lâm đi về phía bắc.", "Các Tuần Du Nhân đi về phía bắc."},
+		{"He was the Steward of Gondor.", "Người quản lý Gondor là ông.", "Quốc quản Gondor là ông."},
+		// Used more often than the English says the term: left alone.
+		{"The Rangers met a ranger.", "Các kiểm lâm gặp một kiểm lâm.", "Các kiểm lâm gặp một kiểm lâm."},
+		{"The [Rangers](../R/Rangers.md) came.", "[Kiểm lâm](../K/Kiểm_lâm.md) đến.", "[Tuần Du Nhân](../K/Kiểm_lâm.md) đến."},
+	}
+	for _, c := range cases {
+		if got := f.fix(c.en, c.vi, map[string]int{}); got != c.want {
+			t.Errorf("fix(%q) = %q, want %q", c.vi, got, c.want)
+		}
+	}
+}
+
+func TestDictMissesLinkText(t *testing.T) {
+	g := dictTerms(map[string]string{"King Théoden": "Vua Théoden"})
+	if m := dictMisses(g, "King [Théoden](../T/Théoden.md) rode.", "Vua [Théoden](../T/Théoden.md) cưỡi ngựa."); len(m) != 0 {
+		t.Errorf("misses %v across a link", m)
+	}
+	if m := dictMisses(g, "King Théoden rode.", "Nhà vua cưỡi ngựa."); len(m) != 1 {
+		t.Errorf("misses %v, want King Théoden", m)
+	}
+}

@@ -219,6 +219,10 @@ func runDict(args []string) error {
 	audit := fs.Int("audit", 0, "list the terms and pages, this many of each, whose Vietnamese misses the dictionary's")
 	targetLang := fs.String("target-lang", "vi", "target language directory")
 	titles := fs.Bool("titles", false, "take out the terms the English mostly uses inside titles of works, which stay in English")
+	variants := fs.Bool("variants", false, "find the renderings translations gave terms instead of the dictionary's, and have the model confirm them")
+	fix := fs.Bool("fix", false, "put the confirmed renderings right across the corpus")
+	dry := fs.Bool("dry", false, "with -fix, only show what would change")
+	show := fs.Int("show", 0, "with -fix, print this many changed paragraphs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -232,6 +236,21 @@ func runDict(args []string) error {
 	}
 	if *titles {
 		return dictTitles(*root, *sourceLang, out, done)
+	}
+	variantFile := filepath.Join(*root, ".tgw", "dict-variants.tsv")
+	if *variants {
+		n := min(*batch, 25)
+		if *list {
+			n = 0
+		}
+		return dictVariants(*root, *sourceLang, *targetLang, *routeFile, done, variantFile, n)
+	}
+	if *fix {
+		vs, err := loadVariants(variantFile)
+		if err != nil {
+			return err
+		}
+		return dictFix(*root, *sourceLang, *targetLang, done, vs, *dry, *show)
 	}
 	gloss, err := loadGlossary(filepath.Join(*root, ".tgw", "glossary.tsv"))
 	if err != nil {
@@ -375,7 +394,8 @@ func dictTerms(dict map[string]string) *glossary {
 // the translation lacks.
 func dictMisses(dict *glossary, en, vi string) []string {
 	var miss []string
-	low := strings.ToLower(vi)
+	// What a reader sees: Vua [Théoden](...) says Vua Théoden.
+	low := strings.ToLower(strings.Join(strings.Fields(proseText(vi)), " "))
 	seen := map[string]bool{}
 	dict.replace(proseText(en), func(term, want string) string {
 		if !seen[term] && !strings.Contains(low, strings.ToLower(want)) {
