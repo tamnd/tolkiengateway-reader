@@ -73,7 +73,7 @@ func runReview(args []string) error {
 	if err != nil {
 		return err
 	}
-	google, err := mtLogged(filepath.Join(*root, ".tgw", "mt.jsonl"))
+	google, err := mtWrote(filepath.Join(*root, ".tgw", "mt.jsonl"))
 	if err != nil {
 		return err
 	}

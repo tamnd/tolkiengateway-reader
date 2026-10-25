@@ -267,6 +267,17 @@ func (g *glossary) save(path string) error {
 
 // mtLogged lists the pages tgw mt translated whole, which must not teach the glossary.
 func mtLogged(path string) (map[string]bool, error) {
+	// Pages Google only filled in are still ChatGPT's.
+	return mtLog(path, func(engine string, paragraphs int) bool { return engine != "google-fill" })
+}
+
+// mtWrote lists the pages Google wrote paragraphs of. tgw mt logs a page
+// ChatGPT had translated whole too, with no paragraphs.
+func mtWrote(path string) (map[string]bool, error) {
+	return mtLog(path, func(engine string, paragraphs int) bool { return engine == "google" && paragraphs > 0 })
+}
+
+func mtLog(path string, keep func(engine string, paragraphs int) bool) (map[string]bool, error) {
 	pages := map[string]bool{}
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -278,9 +289,11 @@ func mtLogged(path string) (map[string]bool, error) {
 	defer f.Close()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		var r struct{ Page, Engine string }
-		// Pages Google only filled in are still ChatGPT's.
-		if json.Unmarshal(s.Bytes(), &r) == nil && r.Page != "" && r.Engine != "google-fill" {
+		var r struct {
+			Page, Engine string
+			Paragraphs   int
+		}
+		if json.Unmarshal(s.Bytes(), &r) == nil && r.Page != "" && keep(r.Engine, r.Paragraphs) {
 			pages[r.Page] = true
 		}
 	}
