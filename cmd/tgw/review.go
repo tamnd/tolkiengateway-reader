@@ -258,7 +258,9 @@ func reviewPages(root, sourceLang, targetLang string, google map[string]bool, di
 		context := pageContext(ep, vp)
 		// Google wrote the HTML text of every page, so it is all judged.
 		for _, p := range alignedSpans(root, sourceLang, targetLang, page) {
-			if done[reviewKey(page, p[0])] {
+			// A navigation box of hundreds of links is too long for one
+			// chat turn, and has nothing to translate.
+			if len(p[0]) > 3000 || done[reviewKey(page, p[0])] {
 				continue
 			}
 			out = append(out, &reviewItem{Page: page, Para: -1, Engine: "google", Why: "html", EN: p[0], VI: p[1], Context: context, HTML: true})
