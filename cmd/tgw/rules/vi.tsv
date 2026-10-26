@@ -1,0 +1,71 @@
+# Post-edit rules for Vietnamese, run on every page and on every engine's
+# output. kind<TAB>from<TAB>to<TAB>note. A term is a whole-word literal; a
+# re is a Go regular expression. Add a rule only when the rewrite is right
+# wherever it matches; what depends on context is left to tgw review.
+#
+# One name for each Tolkien term: the form the corpus uses most.
+term	Chiếc Nhẫn Duy Nhất	Nhẫn Chúa	One Ring
+term	Nhẫn Duy Nhất	Nhẫn Chúa	One Ring
+term	Chiếc Nhẫn Chí Tôn	Nhẫn Chúa	One Ring
+term	Nhẫn Chí Tôn	Nhẫn Chúa	One Ring
+term	Nhẫn Chủ	Nhẫn Chúa	One Ring
+term	Núi Doom	Núi Diệt Vong	Mount Doom
+term	Chúa tể Hắc ám	Chúa tể Bóng tối	Dark Lord
+term	Chúa Tể Hắc Ám	Chúa tể Bóng tối	Dark Lord
+term	Chiến tranh Nhẫn	Cuộc chiến Nhẫn	War of the Ring
+term	Cuộc Chiến Tranh Nhẫn	Cuộc chiến Nhẫn	War of the Ring
+term	Kẻ Mang Nhẫn	Người Mang Nhẫn	Ring-bearer
+term	Hiệp hội Nhẫn	Đoàn Hộ Nhẫn	Fellowship of the Ring
+term	Người lùn	Người Lùn	Dwarves
+term	Người Nửa Phần	Hobbit	Halflings, as the glossary has Hobbit
+# The Ages: Kỷ Đệ Nhất, Nhị, Tam, Tứ, never the calques.
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Nhất|nhất)\b	Kỷ Đệ Nhất	First Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Hai|hai)\b	Kỷ Đệ Nhị	Second Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Ba|ba)\b	Kỷ Đệ Tam	Third Age
+re	(Kỷ nguyên|Thời đại|Thời Đại|Kỷ) thứ (Tư|tư)\b	Kỷ Đệ Tứ	Fourth Age
+re	(Kỷ nguyên|Thời đại|Thời Đại) (Đệ Nhất|Đệ Nhị|Đệ Tam|Đệ Tứ)	Kỷ $2	Kỷ nguyên Đệ Tam
+# An English article left before a name after a Vietnamese word: "ở the
+# Shire". The word before must be Vietnamese, so a title such as "Return to
+# the Shire" is left alone.
+re	(^|[^\p{L}])((?:[\p{L}]*[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵĐ][\p{L}]*|trong|ra|qua|cho|theo|khi|nhau|sang|xa|kia|nhà|ta|tham gia|gia) )the (\p{Lu})	$1$2$3	the Shire
+re	(^|[^\p{L}])((?:[\p{L}]*[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵĐ][\p{L}]*|trong|ra|qua|cho|theo|khi|nhau|sang|xa|kia|ta) )\[the (\p{Lu})	$1$2[$3	[the Shire](…)
+# A year after a film or a game reads "phim năm 1978".
+re	\((phim|trò chơi điện tử|trò chơi|loạt phim|phim truyền hình|phim hoạt hình) (\d{4})\)	($1 năm $2)	(1978 film)
+# Spacing: none before a comma, a stop or a semicolon, one between words.
+re	(\p{L}|\)) +([,.;])( |$)	$1$2$3	space before punctuation
+re	(\p{L}[,.;:]?)  +(\p{L})	$1 $2	double space
+term	ông ta	ông	style: never ông ta in narration
+term	Ông ta	Ông	style
+term	bà ta	bà	style
+term	Bà ta	Bà	style
+term	The Lord of the Rings Trực tuyến	The Lord of the Rings Online	work title; mined 8 of 8
+term	Phù thủy-Vua	Vua Phù thủy	mined 5 of 5
+term	Những người bạn yêu tinh	Những người bạn của Tiên tộc	Elf-friends; mined 3 of 3
+term	The Lord of the Rings: Trận chiến vì Trung Địa	The Lord of the Rings: The Battle for Middle-earth	work title
+term	The Lord of the Rings: Cuộc chiến Nhẫn	The Lord of the Rings: War of the Ring	work title
+# Mined from the review log, 3 of 3 or better, the same way each time.
+term	Silvan Tiên tộc	Tiên tộc Silvan	mined 10 of 10
+term	Phiên bản mở rộng	Bản mở rộng	film Extended Edition; mined 16 of 16
+term	Sông Lớn	Đại Hà	Great River; mined 7 of 7
+term	Chiếc nhẫn Chúa	Nhẫn Chúa	mined 7 of 8
+term	Chiếc Nhẫn Một	Nhẫn Chúa	mined 4 of 4
+term	Vua Phù thủy của Angmar	Vua Phù thủy Angmar	mined 4 of 5
+term	Witch-Vua	Vua Phù thủy	mined 3 of 3
+term	Kỷ Đệ Nhị Âm nhạc của các Ainur	Âm nhạc thứ hai của các Ainur	Second Music; mined 9 of 9
+term	Troll' hang ổ	Hang ổ của Troll	mined 5 of 5
+term	Tolkien Ngày đọc	Ngày đọc Tolkien	mined 9 of 10
+term	Tolkien Gia đình	Gia đình Tolkien	mined 3 of 3
+term	Tiên-path	Lối mòn Tiên tộc	Elf-path; mined 4 of 4
+term	Con dao Morgul	Dao Morgul	mined 3 of 3
+term	Bậc thầy của Buckland	Chủ nhân Buckland	Master of Buckland; mined 3 of 3
+term	Người Lùn Lord	Dwarf Lord	mined 3 of 3
+term	Hiệp hội Tolkien	Hội Tolkien	mined 3 of 3
+term	Main article:	Bài chính:	mined 3 of 3
+term	Những bàn tay khác	Other Hands	magazine title; mined 7 of 7
+term	Vương miện Sắt Enterprises	Iron Crown Enterprises	company; mined 5 of 5
+term	Allen và Unwin	Allen and Unwin	publisher; mined 4 of 4
+term	Công ty Saul Zaentz	Saul Zaentz Company	company; mined 4 of 4
+term	Những bức thư của J.R.R. Tolkien	The Letters of J.R.R. Tolkien	work title; mined 3 of 3
+term	Mô tả về Đảo Númenor	A Description of the Island of Númenor	work title; mined 3 of 3
+term	The Lord of the Rings: Chinh phục	The Lord of the Rings: Conquest	work title; mined 3 of 3
+re	(\d{4})-nay\b	$1–nay	2022–nay

@@ -1,0 +1,717 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"embed"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tamnd/llm"
+	"github.com/tamnd/llm/ledger"
+	"github.com/tamnd/llm/prompt"
+	"github.com/tamnd/llm/route"
+)
+
+//go:embed prompts/review.md prompts/style.md
+var reviewPrompts embed.FS
+
+// runReview is the model layer of the quality harness. It sends paragraphs,
+// a random sample of every engine plus the worst tgw qa flagged, to a model
+// that lists their errors MQM style and gives a corrected paragraph. The
+// errors score each engine; with -fix, corrections that keep the markup and
+// numbers are written back to the pages.
+func runReview(args []string) error {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	root := fs.String("corpus", corpusRoot(), "corpus repository")
+	sourceLang := fs.String("source-lang", "en", "source language directory")
+	targetLang := fs.String("target-lang", "vi", "target language directory")
+	routeFile := fs.String("routes", "", "llm route registry; defaults to Tolkien Gateway config")
+	sample := fs.Int("sample", 60, "random paragraphs to review per engine")
+	pagesFlag := fs.String("pages", "", "review every paragraph Google wrote on these pages, in order, or @file; replaces -sample and -worst")
+	limit := fs.Int("limit", 0, "with -pages, stop after this many paragraphs")
+	worst := fs.Int("worst", 60, "paragraphs flagged by tgw qa to review")
+	checks := fs.String("checks", "english,glue,term,spaces,punct", "tgw qa checks whose paragraphs count as worst")
+	batch := fs.Int("batch", 12, "paragraphs per request")
+	fix := fs.Bool("fix", false, "write corrections that keep the markup back to the pages")
+	seed := fs.Int64("seed", 0, "sampling seed; 0 picks one from the clock")
+	out := fs.String("out", "", "where to log each reviewed paragraph; defaults to .tgw/review.jsonl")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		*out = filepath.Join(*root, ".tgw", "review.jsonl")
+	}
+	if *seed == 0 {
+		*seed = time.Now().UnixNano()
+	}
+	rng := rand.New(rand.NewSource(*seed))
+
+	llm.Configure(llm.Config{App: "tolkiengateway"})
+	registry, _, err := route.LoadOrDefault(*routeFile)
+	if err != nil {
+		return err
+	}
+	pool := route.NewJobPool(registry, "translate")
+	if pool.Empty() {
+		return fmt.Errorf("no enabled route accepts translate jobs")
+	}
+	template, err := prompt.New(reviewPrompts).Get("review")
+	if err != nil {
+		return err
+	}
+	gloss, err := loadGlossary(filepath.Join(*root, ".tgw", "glossary.tsv"))
+	if err != nil {
+		return err
+	}
+	google, err := mtWrote(filepath.Join(*root, ".tgw", "mt.jsonl"))
+	if err != nil {
+		return err
+	}
+
+	var items []*reviewItem
+	if *pagesFlag != "" {
+		pages, err := translateTargets(*pagesFlag)
+		if err != nil {
+			return err
+		}
+		done, err := reviewed(*out)
+		if err != nil {
+			return err
+		}
+		dict, err := loadDict(filepath.Join(*root, ".tgw", "dict.tsv"))
+		if err != nil {
+			return err
+		}
+		items = reviewPages(*root, *sourceLang, *targetLang, google, dictTerms(dict), pages, done, *limit)
+	} else {
+		sampled, err := reviewSample(*root, *sourceLang, *targetLang, google, rng, *sample)
+		if err != nil {
+			return err
+		}
+		flagged, err := reviewWorst(*root, *sourceLang, *targetLang, strings.Split(*checks, ","), rng, *worst)
+		if err != nil {
+			return err
+		}
+		items = append(sampled, flagged...)
+	}
+	fmt.Printf("review: %d paragraphs (seed %d)\n", len(items), *seed)
+
+	logFile, err := os.OpenFile(*out, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	log, err := ledger.Open(filepath.Join(*root, ".tgw", "ledger.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+
+	ctx := context.Background()
+	var batches [][]*reviewItem
+	for i := 0; i < len(items); i += *batch {
+		batches = append(batches, items[i:min(i+*batch, len(items))])
+	}
+	work := make(chan []*reviewItem)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for w := 0; w < max(pool.Lanes(), 1); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for b := range work {
+				instruction, err := template.Render(map[string]string{"LANGUAGE": "Vietnamese", "STYLE": styleGuide, "GLOSSARY": reviewGlossary(gloss, b)})
+				if err == nil {
+					err = reviewBatch(ctx, pool, log, gloss, instruction, b)
+				}
+				mu.Lock()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "review:", err)
+				}
+				for _, it := range b {
+					if it.Verdict == nil {
+						continue
+					}
+					if *fix {
+						it.applyFix(*root, *targetLang)
+					}
+					line, _ := json.Marshal(it)
+					fmt.Fprintln(logFile, string(line))
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for i, b := range batches {
+		work <- b
+		fmt.Printf("review: batch %d/%d\n", i+1, len(batches))
+	}
+	close(work)
+	wg.Wait()
+	reviewReport(items)
+	return nil
+}
+
+type reviewItem struct {
+	Page    string        `json:"page"`
+	Para    int           `json:"para"`
+	Engine  string        `json:"engine"`
+	Why     string        `json:"why"` // sample, or the qa check that flagged it
+	EN      string        `json:"en"`
+	VI      string        `json:"vi"`
+	Verdict *reviewAnswer `json:"verdict,omitempty"`
+	Applied string        `json:"applied,omitempty"` // yes, or why the fix was not
+	// HTML marks a run of text in a block of raw HTML rather than a
+	// paragraph.
+	HTML bool `json:"html,omitempty"`
+	// Context is how the page opens in VI, for the pronouns and terms it
+	// has settled on.
+	Context string `json:"-"`
+}
+
+type reviewAnswer struct {
+	ID     int           `json:"id"`
+	Errors []reviewError `json:"errors"`
+	Fix    string        `json:"fix"`
+}
+
+type reviewError struct {
+	Cat  string `json:"cat"`
+	Sev  string `json:"sev"`
+	EN   string `json:"en"`
+	Bad  string `json:"bad"`
+	Good string `json:"good"`
+}
+
+// reviewSample picks random paragraphs, n per engine, one per page, from
+// paragraphs long enough to judge.
+func reviewSample(root, sourceLang, targetLang string, google map[string]bool, rng *rand.Rand, n int) ([]*reviewItem, error) {
+	var pages []string
+	base := filepath.Join(root, "content", targetLang)
+	err := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && filepath.Ext(path) == ".md" {
+			rel, _ := filepath.Rel(base, path)
+			pages = append(pages, filepath.ToSlash(rel))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	rng.Shuffle(len(pages), func(i, j int) { pages[i], pages[j] = pages[j], pages[i] })
+	taken := map[string]int{}
+	var out []*reviewItem
+	for _, page := range pages {
+		engine := "gpt"
+		if google[page] {
+			engine = "google"
+		}
+		if taken[engine] >= n {
+			if taken["gpt"] >= n && taken["google"] >= n {
+				break
+			}
+			continue
+		}
+		ep, vp, ok := readAligned(root, sourceLang, targetLang, page)
+		if !ok {
+			continue
+		}
+		var long []int
+		for i := range vp {
+			if ep[i] != vp[i] && len(ep[i]) >= 120 && !strings.HasPrefix(ep[i], "|") {
+				long = append(long, i)
+			}
+		}
+		if len(long) == 0 {
+			continue
+		}
+		i := long[rng.Intn(len(long))]
+		out = append(out, &reviewItem{Page: page, Para: i, Engine: engine, Why: "sample", EN: ep[i], VI: vp[i]})
+		taken[engine]++
+	}
+	return out, nil
+}
+
+// reviewPages lists the paragraphs Google wrote on the given pages, in
+// order, leaving out those already reviewed and those with nothing to
+// judge: short ones, tables, citations and text left in English.
+// reviewPages lists the items of the given pages not yet judged: the HTML
+// text of every page, every paragraph of Google's pages, and the paragraphs
+// of the other pages that miss a dictionary term.
+func reviewPages(root, sourceLang, targetLang string, google map[string]bool, dict *glossary, pages []string, done map[string]bool, limit int) []*reviewItem {
+	var out []*reviewItem
+	for _, page := range pages {
+		ep, vp, ok := readAligned(root, sourceLang, targetLang, page)
+		if !ok {
+			continue
+		}
+		context := pageContext(ep, vp)
+		// Google wrote the HTML text of every page, so it is all judged.
+		for _, p := range alignedSpans(root, sourceLang, targetLang, page) {
+			// A navigation box of hundreds of links is too long for one
+			// chat turn, and has nothing to translate.
+			if len(p[0]) > 3000 || done[reviewKey(page, p[0])] {
+				continue
+			}
+			out = append(out, &reviewItem{Page: page, Para: -1, Engine: "google", Why: "html", EN: p[0], VI: p[1], Context: context, HTML: true})
+			if limit > 0 && len(out) >= limit {
+				return out
+			}
+		}
+		for i := range vp {
+			e := ep[i]
+			if e == vp[i] || len(e) < 40 || len(e) > 3000 || strings.HasPrefix(e, "|") || !hasLetters(e) || done[reviewKey(page, e)] {
+				continue
+			}
+			if isCitation(strings.TrimLeft(e, "-*+ ")) {
+				continue
+			}
+			engine, why := "google", "pass"
+			if !google[page] {
+				if len(dictMisses(dict, e, vp[i])) == 0 {
+					continue
+				}
+				engine, why = "chatgpt", "dict"
+			}
+			out = append(out, &reviewItem{Page: page, Para: i, Engine: engine, Why: why, EN: e, VI: vp[i], Context: context})
+			if limit > 0 && len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// pageContext is the first translated paragraph of a page, cut short.
+func pageContext(ep, vp []string) string {
+	for i := range vp {
+		if vp[i] != ep[i] && len(vp[i]) >= 80 && !strings.HasPrefix(vp[i], "|") {
+			r := []rune(maskTarget.ReplaceAllString(vp[i], "]"))
+			if len(r) > 400 {
+				r = append(r[:400], '…')
+			}
+			return string(r)
+		}
+	}
+	return ""
+}
+
+func reviewKey(page, en string) string { return page + "\x00" + en }
+
+// reviewed lists the paragraphs the log already has a verdict for.
+func reviewed(path string) (map[string]bool, error) {
+	done := map[string]bool{}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return done, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 1<<20), 4<<20)
+	for s.Scan() {
+		var it reviewItem
+		if json.Unmarshal(s.Bytes(), &it) == nil && it.Verdict != nil {
+			done[reviewKey(it.Page, it.EN)] = true
+		}
+	}
+	return done, s.Err()
+}
+
+// reviewWorst picks paragraphs tgw qa flagged.
+func reviewWorst(root, sourceLang, targetLang string, checks []string, rng *rand.Rand, n int) ([]*reviewItem, error) {
+	f, err := os.Open(filepath.Join(root, ".tgw", "qa.jsonl"))
+	if os.IsNotExist(err) || n <= 0 {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	want := map[string]bool{}
+	for _, c := range checks {
+		want[strings.TrimSpace(c)] = true
+	}
+	var found []qaProblem
+	seen := map[string]bool{}
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 1<<20), 1<<20)
+	for s.Scan() {
+		var p qaProblem
+		key := ""
+		if json.Unmarshal(s.Bytes(), &p) == nil && want[p.Check] && p.Para >= 0 {
+			key = fmt.Sprintf("%s#%d", p.Page, p.Para)
+		}
+		if key != "" && !seen[key] {
+			seen[key] = true
+			found = append(found, p)
+		}
+	}
+	rng.Shuffle(len(found), func(i, j int) { found[i], found[j] = found[j], found[i] })
+	var out []*reviewItem
+	for _, p := range found {
+		if len(out) >= n {
+			break
+		}
+		ep, vp, ok := readAligned(root, sourceLang, targetLang, p.Page)
+		if !ok || p.Para >= len(vp) || len(ep[p.Para]) > 3000 {
+			continue
+		}
+		out = append(out, &reviewItem{Page: p.Page, Para: p.Para, Engine: p.Engine, Why: p.Check, EN: ep[p.Para], VI: vp[p.Para]})
+	}
+	return out, s.Err()
+}
+
+// alignedSpans pairs the translated runs of text in a page's HTML with
+// their English, those of at least four words; the page's blocks of HTML
+// and the runs in each must line up one to one.
+func alignedSpans(root, sourceLang, targetLang, page string) [][2]string {
+	e, err := os.ReadFile(filepath.Join(root, "content", sourceLang, page))
+	if err != nil {
+		return nil
+	}
+	v, err := os.ReadFile(filepath.Join(root, "content", targetLang, page))
+	if err != nil {
+		return nil
+	}
+	blocks := func(text string) []string {
+		var out []string
+		for _, c := range splitTranslation(text[len(frontMatter(text)):]) {
+			if c.verbatim {
+				out = append(out, c.text)
+			}
+		}
+		return out
+	}
+	eb, vb := blocks(string(e)), blocks(string(v))
+	if len(eb) != len(vb) {
+		return nil
+	}
+	var out [][2]string
+	for i := range eb {
+		es, vs := htmlSpans(eb[i]), htmlSpans(vb[i])
+		if len(es) != len(vs) {
+			continue
+		}
+		for j := range es {
+			en, vi := eb[i][es[j].start:es[j].end], vb[i][vs[j].start:vs[j].end]
+			if en != vi && len(strings.Fields(htmlVisible(en))) >= 4 && htmlTranslatable(en) {
+				out = append(out, [2]string{en, vi})
+			}
+		}
+	}
+	return out
+}
+
+func readAligned(root, sourceLang, targetLang, page string) (en, vi []string, ok bool) {
+	e, err := os.ReadFile(filepath.Join(root, "content", sourceLang, page))
+	if err != nil {
+		return nil, nil, false
+	}
+	v, err := os.ReadFile(filepath.Join(root, "content", targetLang, page))
+	if err != nil {
+		return nil, nil, false
+	}
+	en, vi = pageParagraphs(string(e)), pageParagraphs(string(v))
+	return en, vi, len(en) == len(vi)
+}
+
+func loadGlossary(path string) (*glossary, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return newGlossary(nil), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	terms := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if en, vi, ok := strings.Cut(line, "\t"); ok {
+			terms[en] = vi
+		}
+	}
+	// The dictionary beside the glossary was settled on purpose, and wins.
+	dict, err := loadDict(filepath.Join(filepath.Dir(path), "dict.tsv"))
+	if err != nil {
+		return nil, err
+	}
+	for en, vi := range dict {
+		if vi == dictNotTerm {
+			delete(terms, en)
+		} else {
+			terms[en] = vi
+		}
+	}
+	return withFixes(newGlossary(terms)), nil
+}
+
+//go:embed prompts/style.md
+var styleGuide string
+
+// pageTitle turns a page path such as main/F/Frodo_Baggins.md into its title.
+func pageTitle(page string) string {
+	name := strings.TrimSuffix(filepath.Base(page), ".md")
+	if t, err := url.PathUnescape(name); err == nil {
+		name = t
+	}
+	return strings.ReplaceAll(name, "_", " ")
+}
+
+// reviewGlossary lists the glossary terms that occur in a batch.
+func reviewGlossary(g *glossary, items []*reviewItem) string {
+	var texts []string
+	for _, it := range items {
+		texts = append(texts, it.EN)
+	}
+	return glossaryFor(g, texts...)
+}
+
+// glossaryFor lists the glossary terms that occur in some texts, as words
+// or as the text of a link.
+func glossaryFor(g *glossary, texts ...string) string {
+	if g == nil {
+		return "(none)"
+	}
+	used := map[string]string{}
+	for _, t := range texts {
+		g.replace(t, func(term, vi string) string { used[term] = vi; return term })
+		for text := range linkTexts(t) {
+			if vi, ok := g.terms[text]; ok {
+				used[text] = vi
+			}
+		}
+	}
+	// A name kept as it is needs no line, unless it holds an English word
+	// the model might translate (Shire, Bag End).
+	for k, vi := range used {
+		if vi == k && onlyNames(k) {
+			delete(used, k)
+		}
+	}
+	if len(used) == 0 {
+		return "(none)"
+	}
+	keys := make([]string, 0, len(used))
+	for k := range used {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&b, "- %s: %s\n", k, used[k])
+	}
+	return b.String()
+}
+
+func reviewBatch(ctx context.Context, pool *route.Pool, log *ledger.Log, gloss *glossary, instruction string, items []*reviewItem) error {
+	var in strings.Builder
+	for i, it := range items {
+		if i == 0 || it.Page != items[i-1].Page {
+			fmt.Fprintf(&in, "## PAGE: %s\n", pageTitle(it.Page))
+			if it.Context != "" {
+				fmt.Fprintf(&in, "CONTEXT: %s\n", it.Context)
+			}
+			in.WriteString("\n")
+		}
+		fmt.Fprintf(&in, "### Item %d\nEN:\n%s\n\nVI:\n%s\n\n", i+1, it.EN, it.VI)
+	}
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		r, client, release, err := pickRoute(ctx, pool)
+		if err != nil {
+			return err
+		}
+		started := time.Now()
+		response, callErr := client.Complete(ctx, llm.Request{Model: r.Wire(), Instructions: instruction, Input: in.String()})
+		response.Route = r.Name
+		response.Elapsed = time.Since(started)
+		release()
+		_ = log.Record("review", items[0].Page, r.Name, attempt, response, callErr)
+		if callErr != nil {
+			pool.Fail(r.Name, callErr)
+			lastErr = callErr
+			continue
+		}
+		pool.Succeed(r.Name)
+		answers, err := parseReview(response.Text)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, a := range answers {
+			if a.ID >= 1 && a.ID <= len(items) {
+				// A small judge lists words it would keep as they are.
+				// Nor is a term that follows the glossary an error.
+				kept := a.Errors[:0]
+				for _, e := range a.Errors {
+					if vi, ok := gloss.terms[strings.TrimSpace(e.EN)]; ok && strings.EqualFold(vi, strings.TrimSpace(e.Bad)) {
+						continue
+					}
+					if !strings.EqualFold(strings.TrimSpace(e.Bad), strings.TrimSpace(e.Good)) {
+						kept = append(kept, e)
+					}
+				}
+				a.Errors = kept
+				items[a.ID-1].Verdict = &a
+			}
+		}
+		return nil
+	}
+	return lastErr
+}
+
+// parseReview reads the JSON array out of an answer, past any code fence
+// or words around it.
+func parseReview(text string) ([]reviewAnswer, error) {
+	start, end := strings.Index(text, "["), strings.LastIndex(text, "]")
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("no JSON array in answer")
+	}
+	var answers []reviewAnswer
+	if err := json.Unmarshal([]byte(text[start:end+1]), &answers); err != nil {
+		return nil, fmt.Errorf("answer: %w", err)
+	}
+	return answers, nil
+}
+
+// applyFix writes the corrected paragraph into the page if it keeps the
+// source's markup and numbers and the page still has the paragraph that
+// was reviewed.
+func (it *reviewItem) applyFix(root, targetLang string) {
+	fix := restoreTargets(it.VI, strings.TrimSpace(it.Verdict.Fix))
+	switch {
+	case fix == "" || fix == it.VI:
+		return
+	case it.HTML && strings.Join(htmlAnyTag.FindAllString(it.VI, -1), "") != strings.Join(htmlAnyTag.FindAllString(fix, -1), ""):
+		it.Applied = "markup: tags changed"
+		return
+	case !it.HTML && validateChunk(it.EN, fix) != nil:
+		it.Applied = "markup: " + validateChunk(it.EN, fix).Error()
+		return
+	case checkNumbers(it.EN, fix) != nil:
+		it.Applied = checkNumbers(it.EN, fix).Error()
+		return
+	case fix == strings.TrimSpace(it.EN) || englishShare(fix) > 0.5:
+		it.Applied = "fix is English"
+		return
+	case len(it.Verdict.Errors) == 0:
+		it.Applied = "fix without errors"
+		return
+	}
+	fix = applyRules(politePronouns(fix))
+	path := filepath.Join(root, "content", targetLang, it.Page)
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Count(string(data), it.VI) != 1 {
+		it.Applied = "paragraph changed or repeated"
+		return
+	}
+	if err := atomicWrite(path, []byte(strings.Replace(string(data), it.VI, fix, 1))); err != nil {
+		it.Applied = err.Error()
+		return
+	}
+	it.Applied = "yes"
+}
+
+// restoreTargets puts back link targets a model rewrote, in order, when
+// the fix has as many links as the paragraph it corrects.
+func restoreTargets(vi, fix string) string {
+	want := chunkLink.FindAllStringSubmatch(vi, -1)
+	got := chunkLink.FindAllStringSubmatchIndex(fix, -1)
+	if len(want) != len(got) {
+		return fix
+	}
+	var b strings.Builder
+	last := 0
+	for i, loc := range got {
+		b.WriteString(fix[last:loc[2]])
+		b.WriteString(want[i][1])
+		last = loc[3]
+	}
+	b.WriteString(fix[last:])
+	return b.String()
+}
+
+// mqmWeight scores an error by severity, as MQM does.
+var mqmWeight = map[string]int{"minor": 1, "major": 5, "critical": 10}
+
+func reviewReport(items []*reviewItem) {
+	type score struct {
+		items, words, penalty, clean int
+		cats                         map[string]int
+	}
+	scores := map[string]*score{}
+	terms := map[string]int{}
+	for _, it := range items {
+		if it.Verdict == nil {
+			continue
+		}
+		key := it.Engine + " " + it.Why
+		if it.Why != "sample" && it.Why != "pass" {
+			key = it.Engine + " flagged"
+		}
+		s := scores[key]
+		if s == nil {
+			s = &score{cats: map[string]int{}}
+			scores[key] = s
+		}
+		s.items++
+		s.words += len(strings.Fields(it.EN))
+		if len(it.Verdict.Errors) == 0 {
+			s.clean++
+		}
+		for _, e := range it.Verdict.Errors {
+			s.penalty += mqmWeight[e.Sev]
+			s.cats[e.Cat+"/"+e.Sev]++
+			if e.Cat == "terminology" && e.EN != "" && e.Good != "" {
+				terms[e.EN+" → "+e.Good]++
+			}
+		}
+	}
+	keys := make([]string, 0, len(scores))
+	for k := range scores {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		s := scores[k]
+		fmt.Printf("\n%s: %d paragraphs, %d clean, MQM penalty %.1f per 100 words\n", k, s.items, s.clean, 100*float64(s.penalty)/float64(max(s.words, 1)))
+		cats := make([]string, 0, len(s.cats))
+		for c := range s.cats {
+			cats = append(cats, c)
+		}
+		sort.Strings(cats)
+		for _, c := range cats {
+			fmt.Printf("  %-24s %d\n", c, s.cats[c])
+		}
+	}
+	type term struct {
+		text string
+		n    int
+	}
+	var ranked []term
+	for t, n := range terms {
+		ranked = append(ranked, term{t, n})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].n > ranked[j].n })
+	if len(ranked) > 0 {
+		fmt.Println("\nterminology fixes:")
+	}
+	for i, t := range ranked {
+		if i == 40 {
+			break
+		}
+		fmt.Printf("  %3d  %s\n", t.n, t.text)
+	}
+}

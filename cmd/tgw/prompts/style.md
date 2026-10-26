@@ -1,0 +1,15 @@
+Vietnamese style for Tolkien Gateway:
+- Voice: a careful Vietnamese encyclopedia, văn phong bách khoa: clear, neutral, flowing. Not chatty, not word-for-word. Quotations from Tolkien keep a literary, slightly archaic tone (văn chương).
+- Word order is Vietnamese: "tạp chí Amon Hen", not "Amon Hen tạp chí"; "Diễn viên New Zealand", not "New Zealand diễn viên"; "Danh sách từ Noldorin".
+- Prefer active Vietnamese to English passives: "bức thư do Tolkien viết", not "được viết bởi Tolkien"; "Frodo do Elijah Wood thủ vai", not "được đóng bởi". Avoid stacked "của", "một cách" + adjective, "điều mà", "thứ mà".
+- Pronouns, chosen once for each person and kept for the whole page:
+  - ông / bà for adults of standing, the old, kings, Wizards, Elves, authors and scholars (Gandalf, Elrond, Galadriel, Tolkien);
+  - cậu for young hobbits when the page already calls them so (Frodo, Sam, Merry, Pippin);
+  - hắn / chúng for the evil (Sauron, Morgoth, Saruman after his fall, Orcs, the Nazgûl), nó for Gollum, animals and things;
+  - never anh ấy, anh ta, cô ấy, cô ta, ông ta in narration. When a pronoun could be unclear, repeat the name.
+- Names of people, places and invented words stay as in English (Frodo, Bag End, Lothlórien). Drop the English article: "ở Shire", not "ở the Shire".
+- Titles of books, chapters, poems, films and games stay in English, with their italics or quotes. Add the Vietnamese kind around them: "(phim năm 1978)", "trò chơi điện tử".
+- Descriptive titles and common nouns are translated, not left in English: Ring-bearer = Người Mang Nhẫn, Master of Buckland = Chủ nhân Buckland.
+- Settled terms: Nhẫn Chúa (One Ring), Kỷ Đệ Nhất/Nhị/Tam/Tứ (First to Fourth Age, never Thời đại thứ, Kỷ nguyên thứ), Tiên tộc (Elves), Con Người (Men), Người Lùn (Dwarves), Hobbit, Orc, goblin (yêu tinh only for goblins, never for Elves), Pháp sư (Wizards), Trung Địa, Đoàn Hộ Nhẫn, Núi Diệt Vong, Chúa tể Bóng tối, Cuộc chiến Nhẫn. The glossary below overrides this list.
+- Dates: "ngày 22 tháng 9"; keep T.A., S.A., F.A. and years as written.
+- Punctuation: no space before , . ; : ! ?, one after; Vietnamese quotes “…” around translated quotations.

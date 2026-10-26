@@ -2,3 +2,4 @@
 /site/
 *.out
 .DS_Store
+/cmd/tgw/tgw
